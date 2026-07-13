@@ -63,8 +63,22 @@ def load_config() -> dict:
             f"и впишите gsa_projects_dir."
         )
     # utf-8-sig: терпим BOM (Блокнот сохраняет с ним) — иначе json.load падает
-    with CONFIG_PATH.open(encoding="utf-8-sig") as fh:
-        return json.load(fh)
+    text = CONFIG_PATH.read_text(encoding="utf-8-sig")
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        lines = text.splitlines()
+        bad = lines[e.lineno - 1] if 0 < e.lineno <= len(lines) else ""
+        pointer = " " * (max(e.colno - 1, 0)) + "^"
+        sys.exit(
+            f"Ошибка в конфиге {CONFIG_PATH.name}: {e.msg}\n"
+            f"  строка {e.lineno}, колонка {e.colno}:\n"
+            f"    {bad}\n"
+            f"    {pointer}\n"
+            "Частые причины: пропущена запятая в конце предыдущей строки; "
+            "одиночный '\\' в пути (нужно '\\\\'); '//'-комментарий (в JSON нельзя); "
+            "лишняя запятая перед '}'."
+        )
 
 
 def as_list(value) -> list[str]:
