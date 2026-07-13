@@ -62,7 +62,8 @@ def load_config() -> dict:
             f"Скопируйте шаблон:  cp {example} {CONFIG_PATH}\n"
             f"и впишите gsa_projects_dir."
         )
-    with CONFIG_PATH.open(encoding="utf-8") as fh:
+    # utf-8-sig: терпим BOM (Блокнот сохраняет с ним) — иначе json.load падает
+    with CONFIG_PATH.open(encoding="utf-8-sig") as fh:
         return json.load(fh)
 
 
@@ -384,7 +385,7 @@ def cmd_settings(cfg: dict, args) -> None:
     # собираем спецификации правок из --set и --set-file
     raw_specs: list[str] = list(args.set or [])
     if args.set_file:
-        for line in Path(args.set_file).read_text(encoding="utf-8").splitlines():
+        for line in Path(args.set_file).read_text(encoding="utf-8-sig").splitlines():
             line = line.strip()
             if line and not line.startswith("#"):
                 raw_specs.append(line)
