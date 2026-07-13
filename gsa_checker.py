@@ -119,28 +119,11 @@ def count_lines(path: Path) -> int:
     return total
 
 
-# ── сопоставление hash-имени файла проекту (best-effort) ────────────────────
-def read_project_name(prj_path: Path) -> str | None:
-    """GSA хранит человеко-читаемое имя внутри .prj. Формат уточняется по
-    реальному образцу; пока пытаемся вытащить строку с 'name'. Возвращает None,
-    если не нашли — тогда используется имя файла.
-    """
-    try:
-        text = prj_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None
-    for line in text.splitlines():
-        low = line.lower().strip()
-        # эвристика: key=value со словом name; уточним под реальный формат .prj
-        if low.startswith("name=") or low.startswith("projectname="):
-            return line.split("=", 1)[1].strip()
-    return None
-
-
 # ── сбор остатка по проектам ────────────────────────────────────────────────
 def collect_remaining(cfg: dict) -> dict:
     projects_dir = Path(cfg["gsa_projects_dir"])
-    globs = as_list(cfg.get("target_cache_glob", ["*.new", "*.targets"]))
+    globs = as_list(cfg.get("target_cache_glob",
+                            ["*.targets", "*.new_targets", "*.new_targets2"]))
 
     result = {"projects_dir": str(projects_dir), "globs": globs,
               "projects": [], "total_remaining": 0, "errors": []}
@@ -166,10 +149,10 @@ def collect_remaining(cfg: dict) -> dict:
         slot["remaining"] += lines
         slot["files"].append(entry.name)
 
-    # обогащаем человеко-читаемым именем из .prj, если есть
+    # имя проекта = имя файла (GSA так и делает); из .prj не читаем, чтобы не
+    # ловить двойную перекодировку кириллицы
     for base, slot in per_project.items():
-        prj = projects_dir / f"{base}.prj"
-        slot["name"] = read_project_name(prj) if prj.exists() else None
+        slot["name"] = base
         result["total_remaining"] += slot["remaining"]
 
     result["projects"] = sorted(per_project.values(),
