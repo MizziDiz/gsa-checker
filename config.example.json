@@ -4,7 +4,7 @@
   "gsa_projects_dir": "C:\\Users\\Administrator\\AppData\\Roaming\\GSA Search Engine Ranker\\projects",
   "gsa_exe_path": "C:\\GSA Search Engine Ranker\\GSA Search Engine Ranker.exe",
 
-  "target_cache_glob": ["*.targets"],
+  "target_cache_glob": ["*.targets", "*.new_targets", "*.new_targets2"],
   "verified_glob": ["*.success"],
   "to_verify_glob": ["*.verify"],
   "done_glob": ["*.urls_done"],
