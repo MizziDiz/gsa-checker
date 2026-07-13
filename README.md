@@ -45,6 +45,18 @@ python gsa_checker.py --remaining --json
 > **`--check` запускать первым** на реальном сервере: он покажет, какие расширения
 > лежат в папке проектов, — по ним уточняется `target_cache_glob` под вашу версию GSA.
 
+### Создание проекта (`--create`)
+Собирает готовый к импорту проект: `.prj` из шаблона (`gsa_template_prj`) с проставленными
+`URL`/`Keywords` + `.targets` из батча целей (файл или папка `for_gsa_ser`, дедуп, `--limit`).
+Пишет в `create_out_dir`, живой GSA не трогает.
+```
+python gsa_checker.py --create --name Brave-0001 --url https://site/ \
+  --keywords "kw1, kw2" --targets "\\share\for_gsa_ser\09-07" --limit 8000
+# --dry-run — превью; --force — перезапись; --template/--out — переопределить пути
+```
+Импорт: скопировать созданные файлы в `gsa_projects_dir` (при закрытом GSA) или
+импортировать через GSA. Заливка emails/статей — как и раньше через `fill_gsa_emails`/Spin-generator.
+
 ### Массовая правка настроек (`--settings`)
 Меняет `[Options]`/`[engines]` в пачке `.prj` (`lib/prj.py` — построчный редактор,
 round-trip байт-в-байт, сохраняет спин-синтаксис и разделитель `0xFF` в аккаунтах).

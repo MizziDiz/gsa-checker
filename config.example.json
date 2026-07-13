@@ -11,6 +11,8 @@
 
   "gsa_ui_title": "GSA Search Engine Ranker",
 
+  "gsa_template_prj": "C:\\A-GSA\\templates\\template.prj",
+  "create_out_dir": "C:\\A-GSA\\created",
   "input_share_dir": "\\\\SERVER1\\share\\for_gsa_ser",
   "import_settle_min": 2,
 

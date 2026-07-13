@@ -368,6 +368,80 @@ def print_stats(data: dict) -> None:
     print(tail)
 
 
+def _read_targets(src: Path, limit: int) -> list[str]:
+    """Список целевых URL из файла или папки (*.txt), дедуп с сохранением порядка."""
+    files = []
+    if src.is_dir():
+        files = sorted(p for p in src.rglob("*.txt") if p.is_file())
+    elif src.is_file():
+        files = [src]
+    seen: set[str] = set()
+    out: list[str] = []
+    for f in files:
+        with f.open(encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                u = line.strip()
+                if u and u not in seen:
+                    seen.add(u)
+                    out.append(u)
+                    if limit and len(out) >= limit:
+                        return out
+    return out
+
+
+def cmd_create(cfg: dict, args) -> None:
+    """Собирает готовый к импорту проект GSA: <name>.prj из шаблона (URL/Keywords) +
+    <name>.targets из батча целей. Не трогает живой GSA — пишет в отдельную папку."""
+    from lib.prj import Prj
+
+    if not args.name:
+        sys.exit("Нужно --name (имя проекта).")
+    template = Path(args.template or cfg.get("gsa_template_prj", ""))
+    if not template.is_file():
+        sys.exit(f"Шаблон .prj не найден: {template}\n"
+                 "Укажите --template ПУТЬ или gsa_template_prj в конфиге.")
+    out_dir = Path(args.out or cfg.get("create_out_dir", "") or (DATA_DIR / "created"))
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    prj_out = out_dir / f"{args.name}.prj"
+    tgt_out = out_dir / f"{args.name}.targets"
+    if (prj_out.exists() or tgt_out.exists()) and not args.force:
+        sys.exit(f"Уже есть {prj_out.name}/{tgt_out.name} в {out_dir}. "
+                 "Добавьте --force для перезаписи.")
+
+    # .prj из шаблона
+    prj = Prj.load(template)
+    changed = []
+    if args.url:
+        prj.set_value("data_value", "URL", args.url)
+        changed.append("URL")
+    if args.keywords:
+        prj.set_value("data_value", "Keywords", args.keywords)
+        changed.append("Keywords")
+
+    # .targets из батча
+    targets: list[str] = []
+    if args.targets:
+        src = Path(args.targets)
+        if not src.exists():
+            sys.exit(f"Источник целей не найден: {src}")
+        targets = _read_targets(src, int(args.limit or 0))
+
+    if args.dry_run:
+        print(f"[dry-run] проект {args.name}")
+        print(f"  шаблон : {template}")
+        print(f"  .prj   : {prj_out}  (правки: {', '.join(changed) or 'нет'})")
+        print(f"  .targets: {tgt_out}  ({len(targets):,} целей)")
+        return
+
+    prj.save(prj_out)
+    tgt_out.write_text("\n".join(targets) + ("\n" if targets else ""), encoding="utf-8")
+    print(f"✓ создан проект {args.name} в {out_dir}")
+    print(f"  {prj_out.name}  (правки: {', '.join(changed) or 'нет'})")
+    print(f"  {tgt_out.name}  ({len(targets):,} целей)")
+    print("Импортируйте папку/файлы в GSA (или скопируйте в gsa_projects_dir).")
+
+
 def cmd_settings(cfg: dict, args) -> None:
     """Массовая правка настроек в .prj: [Options], [engines] и т.п.
 
@@ -473,6 +547,16 @@ def main() -> None:
                     help="проверка Telegram: шлёт тестовое сообщение")
     ap.add_argument("--dry-run", action="store_true",
                     help="для --notify: печатать сообщения, не отправляя")
+    ap.add_argument("--create", action="store_true",
+                    help="собрать проект: .prj из шаблона + .targets из батча")
+    ap.add_argument("--name", help="имя проекта (для --create)")
+    ap.add_argument("--url", help="продвигаемый URL (--create)")
+    ap.add_argument("--keywords", help="ключевые слова через запятую (--create)")
+    ap.add_argument("--targets", help="файл или папка с целями (--create)")
+    ap.add_argument("--template", help="путь к template.prj (--create)")
+    ap.add_argument("--out", help="папка вывода (--create)")
+    ap.add_argument("--limit", type=int, default=0, help="макс. целей (--create)")
+    ap.add_argument("--force", action="store_true", help="перезаписать (--create)")
     ap.add_argument("--settings", action="store_true",
                     help="массовая правка настроек .prj ([Options]/[engines])")
     ap.add_argument("--set", action="append", default=[], metavar="СЕКЦИЯ:ключ=значение",
@@ -493,6 +577,9 @@ def main() -> None:
         raise SystemExit(telegram.test_telegram(cfg))
     if args.notify:
         cmd_notify(cfg, args)
+        return
+    if args.create:
+        cmd_create(cfg, args)
         return
     if args.settings:
         cmd_settings(cfg, args)
