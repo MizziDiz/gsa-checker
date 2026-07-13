@@ -1,0 +1,32 @@
+{
+  "server_name": "gsa-01",
+
+  "gsa_projects_dir": "C:\\Users\\Administrator\\AppData\\Roaming\\GSA Search Engine Ranker\\projects",
+  "gsa_exe_path": "C:\\GSA Search Engine Ranker\\GSA Search Engine Ranker.exe",
+
+  "target_cache_glob": ["*.targets"],
+  "verified_glob": ["*.success"],
+  "to_verify_glob": ["*.verify"],
+  "done_glob": ["*.urls_done"],
+
+  "gsa_ui_title": "GSA Search Engine Ranker",
+
+  "input_share_dir": "\\\\SERVER1\\share\\for_gsa_ser",
+  "import_settle_min": 2,
+
+  "telegram_bot_token": "123456:ABC-ВАШ_ТОКЕН_БОТА",
+  "telegram_chat_id": "ВАШ_CHAT_ID",
+  "telegram_proxy": "",
+  "telegram_relay_url": "",
+  "relay_secret": "",
+
+  "low_targets_threshold": 5000,
+  "cooldown_hours": 8,
+  "heartbeat_hours": 6,
+
+  "stats_snapshots": true,
+  "eta_window_min": 180,
+  "stats_retention_days": 30,
+
+  "debug": false
+}
