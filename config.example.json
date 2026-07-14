@@ -13,8 +13,12 @@
 
   "ui_window_title": "GSA Search Engine Ranker",
   "ui_backend": "uia",
-  "ui_select_all": true,
-  "ui_context_item": "",
+  "ui_refresh_item": "refresh",
+  "ui_toggle_status": true,
+  "ui_status_off": "Inactive",
+  "ui_status_on": "Active",
+  "ui_row_offset": [30, 25],
+  "ui_menu_delay": 0.4,
   "ui_refresh_keys": "",
 
   "gsa_template_prj": "C:\\A-GSA\\templates\\template.prj",

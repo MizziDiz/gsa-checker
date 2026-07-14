@@ -116,51 +116,86 @@ def _find_grid(win, cfg):
         return win
 
 
-def refresh(cfg, log) -> bool:
-    """«Толкает» GSA, чтобы подхватил новые цели. Шаги управляются конфигом:
-      ui_select_all   — выделить все проекты (Ctrl+A) перед действием;
-      ui_context_item — пункт контекстного меню (правый клик по гриду), напр. "Active";
-      ui_refresh_keys — доп. клавиши в конце (напр. "{F5}").
-    Возвращает True при успехе. Пока каркас: точные селекторы доводятся по --ui-check.
-    """
-    _require_pywinauto()
+def _click_menu_item(app, win, target, backend, item, log, delay=0.4) -> bool:
+    """Правый клик по target → клик пункта меню по тексту. При неудаче закрывает
+    меню (Esc) и возвращает False. Работает и с uia, и с win32 (#32768)."""
+    import time
+    from pywinauto import Desktop
     try:
-        _app, win = _connect(cfg)
+        target.right_click_input()
+    except Exception:
+        win.right_click_input()
+    time.sleep(delay)
+    try:
+        if backend == "win32":
+            menu = app.window(class_name="#32768")
+            menu.menu_item(item).click_input()
+        else:
+            menu = Desktop(backend="uia").window(control_type="Menu")
+            menu.child_window(title=item, control_type="MenuItem").click_input()
+        log.info(f"ui: пункт меню «{item}» нажат")
+        return True
+    except Exception as e:
+        try:
+            win.type_keys("{ESC}")
+        except Exception:
+            pass
+        log.error(f"ui: пункт меню «{item}» не найден: {type(e).__name__}: {e}")
+        return False
+
+
+def refresh(cfg, log) -> bool:
+    """Повторяет ручной рефреш GSA:
+      1) ПКМ по гриду → пункт `ui_refresh_item` (по умолчанию "refresh");
+      2) тумблер статуса одного проекта Active→Inactive→Active (чтобы всё перечиталось):
+         выбрать первую строку и дважды дёрнуть статус через пункты
+         `ui_status_off`/`ui_status_on`.
+    Все тексты/координаты — в конфиге. Возвращает True, если шаг 1 удался."""
+    _require_pywinauto()
+    import time
+    delay = float(cfg.get("ui_menu_delay", 0.4) or 0.4)
+    backend = cfg.get("ui_backend", "uia")
+    try:
+        app, win = _connect(cfg)
     except Exception as e:
         log.error(f"ui: не подключились к GSA: {type(e).__name__}: {e}")
         return False
 
     try:
         win.set_focus()
-        grid = _find_grid(win, cfg)      # по геометрии (auto_id GSA = нестабильный HWND)
+        grid = _find_grid(win, cfg)
         try:
-            grid.click_input()           # фокус в грид, чтобы Ctrl+A/меню шли туда
+            grid.click_input()
         except Exception:
             pass
 
-        if cfg.get("ui_select_all", True):
-            grid.type_keys("^a", set_foreground=True)
+        # 1) ПКМ → refresh
+        ok = _click_menu_item(app, win, grid, backend,
+                              cfg.get("ui_refresh_item", "refresh"), log, delay)
 
-        item = cfg.get("ui_context_item", "")
-        if item:
-            # правый клик по гриду → выбрать пункт меню по тексту
-            try:
-                grid.right_click_input()
-            except Exception:
-                win.right_click_input()
-            from pywinauto import Desktop
-            menu = Desktop(backend=cfg.get("ui_backend", "uia")).window(
-                best_match="Context", control_type="Menu")
-            menu.child_window(title=item, control_type="MenuItem").click_input()
+        # 2) тумблер статуса одного проекта
+        if cfg.get("ui_toggle_status", True):
+            from pywinauto import mouse
+            r = grid.rectangle()
+            off = cfg.get("ui_row_offset", [30, 25])
+            row_xy = (r.left + int(off[0]), r.top + int(off[1]))
+            mouse.click(coords=row_xy)           # выбрать первую строку проекта
+            time.sleep(0.3)
+            # ПКМ по выбранной строке; статус off, затем on
+            grid_at_row = grid
+            _click_menu_item(app, win, grid_at_row, backend,
+                             cfg.get("ui_status_off", "Inactive"), log, delay)
+            time.sleep(0.3)
+            mouse.click(coords=row_xy)
+            time.sleep(0.2)
+            _click_menu_item(app, win, grid_at_row, backend,
+                             cfg.get("ui_status_on", "Active"), log, delay)
 
         keys = cfg.get("ui_refresh_keys", "")
         if keys:
             win.type_keys(keys, set_foreground=True)
-
-        log.info(f"ui: рефреш выполнен (select_all={cfg.get('ui_select_all', True)}, "
-                 f"item={item or '—'}, keys={keys or '—'})")
-        return True
+        return ok
     except Exception as e:
         log.error(f"ui: рефреш не удался: {type(e).__name__}: {e}. "
-                  "Проверьте селекторы (--ui-check).")
+                  "Сверьте пункты меню по --ui-check (win32).")
         return False
