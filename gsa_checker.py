@@ -517,8 +517,12 @@ def cmd_autopilot(cfg: dict, args) -> None:
         return
 
     applied = _load_applied()
-    # новейший батч, который получил ещё не каждый low-проект
-    children = [c for c in pool.iterdir() if c.is_dir() or c.suffix.lower() == ".txt"]
+    # новейший батч, который получил ещё не каждый low-проект.
+    # Файлы фильтруем по autopilot_batch_glob (в пуле бывают служебные .txt).
+    batch_glob = cfg.get("autopilot_batch_glob", "*.txt")
+    children = [c for c in pool.iterdir()
+                if c.is_dir() or (c.suffix.lower() == ".txt"
+                                  and fnmatch.fnmatch(c.name, batch_glob))]
     children.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     batch = next((c for c in children
                   if any((c.name, r["name"]) not in applied for r in low)), None)

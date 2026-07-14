@@ -26,7 +26,8 @@
   "cooldown_hours": 8,
   "heartbeat_hours": 6,
 
-  "autopilot_pool_dir": "\\\\10.10.10.50\\шара\\Aparser autosend",
+  "autopilot_pool_dir": "\\\\10.10.10.50\\шара\\Aparser results",
+  "autopilot_batch_glob": "*balanced*.txt",
   "autopilot_min_targets": 5000,
   "autopilot_append_ext": ".new_targets",
   "autopilot_batch_limit": 0,
