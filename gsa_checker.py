@@ -442,6 +442,122 @@ def cmd_create(cfg: dict, args) -> None:
     print("Импортируйте папку/файлы в GSA (или скопируйте в gsa_projects_dir).")
 
 
+AUTOPILOT_JOURNAL = DATA_DIR / "gsa_autopilot.jsonl"
+
+
+def _load_applied() -> set:
+    """Множество (батч, проект), уже дозалитых — для идемпотентности."""
+    applied = set()
+    if AUTOPILOT_JOURNAL.exists():
+        for line in AUTOPILOT_JOURNAL.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("action") == "append" and "batch" in rec and "project" in rec:
+                applied.add((rec["batch"], rec["project"]))
+    return applied
+
+
+def _append_journal(rec: dict) -> None:
+    rec = {"ts": int(time.time()), **rec}
+    AUTOPILOT_JOURNAL.parent.mkdir(parents=True, exist_ok=True)
+    with AUTOPILOT_JOURNAL.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+
+def _append_targets_file(dest: Path, body: bytes) -> None:
+    """Дозаписывает цели в конец файла, не стирая существующее. Ставит перевод
+    строки, если файл не кончался им (чтобы не склеить URL)."""
+    prefix = b""
+    if dest.exists() and dest.stat().st_size > 0:
+        with dest.open("rb") as f:
+            f.seek(-1, 2)
+            if f.read(1) not in (b"\n", b"\r"):
+                prefix = b"\n"
+    with dest.open("ab") as f:
+        f.write(prefix + body)
+
+
+def cmd_autopilot(cfg: dict, args) -> None:
+    """Общий пул: при малом остатке берёт новейший неиспользованный батч из пула и
+    ДОПИСЫВАЕТ его цели в проекты ниже порога (данные не стирает). Идемпотентно по
+    журналу (батч→проект). По умолчанию сухой прогон; запись — с --apply."""
+    from lib import telegram
+
+    projects_dir = Path(cfg.get("gsa_projects_dir", ""))
+    if not projects_dir.is_dir():
+        sys.exit(f"Папка проектов не найдена: {projects_dir}")
+    pool = Path(cfg.get("autopilot_pool_dir") or cfg.get("input_share_dir", ""))
+    if not pool.is_dir():
+        sys.exit(f"Папка-пул батчей не найдена: {pool} "
+                 "(задайте autopilot_pool_dir или input_share_dir).")
+    threshold = float(cfg.get("autopilot_min_targets",
+                              cfg.get("low_targets_threshold", 0)) or 0)
+    if threshold <= 0:
+        sys.exit("Порог не задан: autopilot_min_targets или low_targets_threshold.")
+    ext = cfg.get("autopilot_append_ext", ".new_targets")
+    limit = int(cfg.get("autopilot_batch_limit", 0) or 0)
+    max_proj = int(cfg.get("autopilot_max_projects", 0) or 0)
+    apply = args.apply
+
+    data = collect_stats(cfg)
+    for err in data["errors"]:
+        print(f"⚠ {err}", file=sys.stderr)
+    low = sorted((r for r in data["projects"] if r["remaining"] < threshold),
+                 key=lambda r: r["remaining"])
+    if max_proj:
+        low = low[:max_proj]
+    print(f"Порог {int(threshold):,}: проектов ниже — {len(low)}")
+    if not low:
+        print("Все проекты выше порога — дозаливка не нужна.")
+        return
+
+    applied = _load_applied()
+    # новейший батч, который получил ещё не каждый low-проект
+    children = [c for c in pool.iterdir() if c.is_dir() or c.suffix.lower() == ".txt"]
+    children.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    batch = next((c for c in children
+                  if any((c.name, r["name"]) not in applied for r in low)), None)
+    if batch is None:
+        msg = ("🟡 <b>Автопилот</b>\nПроектам мало целей, но свежих неиспользованных "
+               "батчей в пуле нет — нужны новые списки.")
+        print("Свежих неиспользованных батчей нет — нужны новые списки.")
+        if apply:
+            telegram.send(cfg, msg)
+        return
+
+    targets = _read_targets(batch, limit)
+    print(f"Батч: {batch.name}  ({len(targets):,} целей)")
+    if not targets:
+        print("Батч пустой — пропуск.")
+        return
+    body = ("\n".join(targets) + "\n").encode("utf-8")
+
+    done = []
+    for r in low:
+        if (batch.name, r["name"]) in applied:
+            continue
+        dest = projects_dir / f"{r['name']}{ext}"
+        if apply:
+            _append_targets_file(dest, body)
+            _append_journal({"action": "append", "batch": batch.name,
+                             "project": r["name"], "count": len(targets)})
+        done.append(r["name"])
+        tag = "+ " if apply else "(dry) "
+        print(f"  {tag}{r['name']}: +{len(targets):,} → {dest.name} (было {r['remaining']:,})")
+
+    mode = "ЗАПИСЬ" if apply else "СУХОЙ ПРОГОН (добавьте --apply)"
+    print(f"[{mode}] дозалито проектов: {len(done)} из батча {batch.name}")
+    if apply and done:
+        telegram.send(cfg, f"🤖 <b>Автопилот</b>\nБатч {batch.name}: +{len(targets):,} "
+                           f"целей в {len(done)} проект(ов).\n⚠ обновите интерфейс GSA, "
+                           "чтобы он подхватил новые цели.")
+
+
 def cmd_settings(cfg: dict, args) -> None:
     """Массовая правка настроек в .prj: [Options], [engines] и т.п.
 
@@ -547,6 +663,8 @@ def main() -> None:
                     help="проверка Telegram: шлёт тестовое сообщение")
     ap.add_argument("--dry-run", action="store_true",
                     help="для --notify: печатать сообщения, не отправляя")
+    ap.add_argument("--autopilot", action="store_true",
+                    help="дозалить свежий батч в проекты ниже порога (общий пул)")
     ap.add_argument("--create", action="store_true",
                     help="собрать проект: .prj из шаблона + .targets из батча")
     ap.add_argument("--name", help="имя проекта (для --create)")
@@ -577,6 +695,9 @@ def main() -> None:
         raise SystemExit(telegram.test_telegram(cfg))
     if args.notify:
         cmd_notify(cfg, args)
+        return
+    if args.autopilot:
+        cmd_autopilot(cfg, args)
         return
     if args.create:
         cmd_create(cfg, args)

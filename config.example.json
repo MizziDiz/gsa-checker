@@ -26,6 +26,12 @@
   "cooldown_hours": 8,
   "heartbeat_hours": 6,
 
+  "autopilot_pool_dir": "\\\\SERVER1\\share\\for_gsa_ser",
+  "autopilot_min_targets": 5000,
+  "autopilot_append_ext": ".new_targets",
+  "autopilot_batch_limit": 0,
+  "autopilot_max_projects": 0,
+
   "stats_snapshots": true,
   "eta_window_min": 180,
   "stats_retention_days": 30,
