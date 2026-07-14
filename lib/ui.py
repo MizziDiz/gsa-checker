@@ -116,38 +116,56 @@ def _find_grid(win, cfg):
         return win
 
 
+def _find_menu_item(backend, name):
+    """Ищет пункт меню по тексту среди ВСЕХ открытых меню (в т.ч. подменю).
+    Через .descendants(MenuItem) — у MenuWrapper из .windows() нет child_window."""
+    from pywinauto import Desktop
+    for menu in Desktop(backend=backend).windows(control_type="Menu"):
+        try:
+            items = menu.descendants(control_type="MenuItem")
+        except Exception:
+            continue
+        for it in items:
+            try:
+                t = (it.window_text() or "").strip()
+            except Exception:
+                continue
+            if t == name or t.startswith(name):
+                return it
+    return None
+
+
 def _click_menu_path(app, win, target, backend, path, log, delay=0.4) -> bool:
     """Правый клик по target → проход по пути меню (с подменю), напр.
-    ["Set Status", "Inactive"]. Верхнее из списка Menu берём как активное (чтобы
-    не ловить AmbiguousError при открытом подменю). Esc чистит залипшее меню."""
+    ["Set Status", "Inactive"]. Пункты ищем по тексту среди открытых меню."""
     import time
-    from pywinauto import Desktop
-
-    def menus():
-        return Desktop(backend=backend).windows(control_type="Menu")
-
     try:
-        win.type_keys("{ESC}")           # на всякий случай закрыть прежнее меню
+        win.type_keys("{ESC}")           # закрыть прежнее меню, если залипло
     except Exception:
         pass
-    time.sleep(0.15)
+    time.sleep(0.2)
     try:
+        win.set_focus()
         target.right_click_input()
     except Exception:
-        win.right_click_input()
+        try:
+            win.right_click_input()
+        except Exception as e:
+            log.error(f"ui: правый клик не удался: {type(e).__name__}: {e}")
+            return False
     time.sleep(delay)
     try:
-        ms = menus()
-        if not ms:
-            raise RuntimeError("контекстное меню не появилось")
-        node = ms[-1]
-        for i, name in enumerate(path):
-            item = node.child_window(title=name, control_type="MenuItem")
+        for name in path:
+            item = None
+            for _ in range(15):          # ждём появления пункта/подменю (~3 c)
+                item = _find_menu_item(backend, name)
+                if item:
+                    break
+                time.sleep(0.2)
+            if item is None:
+                raise RuntimeError(f"пункт «{name}» не найден в меню")
             item.click_input()
             time.sleep(delay)
-            if i < len(path) - 1:        # раскрылось подменю — берём верхнее
-                ms = menus()
-                node = ms[-1] if ms else node
         log.info(f"ui: меню {' → '.join(path)} — ок")
         return True
     except Exception as e:
