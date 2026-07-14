@@ -562,6 +562,59 @@ def cmd_autopilot(cfg: dict, args) -> None:
                            "чтобы он подхватил новые цели.")
 
 
+def cmd_emails(cfg: dict, args) -> None:
+    """Обновляет секцию [email accounts] в .prj свежими почтами (уникальный набор на
+    проект). Формат нативный для GSA (разделитель 0xFF). Остальное .prj не трогает.
+
+    ⚠ Как и --settings: делать при ЗАКРЫТОМ GSA (иначе перезапишет при выходе)."""
+    from lib.prj import Prj
+    from lib import emails as em
+
+    count = int(args.count or cfg.get("emails_per_project", 20) or 20)
+    provider = cfg.get("email_provider_ini", em.DEFAULT_PROVIDER)
+    domains = as_list(cfg.get("email_domains", [])) or em.DEFAULT_DOMAINS
+
+    target_dir = Path(args.dir or cfg.get("gsa_projects_dir", ""))
+    if not target_dir.is_dir():
+        sys.exit(f"Папка с .prj не найдена: {target_dir}")
+    prj_files = sorted(target_dir.glob("*.prj"))
+    if args.only:
+        prj_files = [p for p in prj_files if args.only in p.name]
+    if not prj_files:
+        print(f"В {target_dir} нет .prj (фильтр --only={args.only!r})")
+        return
+
+    mode = "ЗАПИСЬ" if args.apply else "СУХОЙ ПРОГОН (без записи; добавьте --apply)"
+    print(f"── emails: {mode} ──  почт/проект: {count}, провайдер: {provider}, "
+          f"проектов: {len(prj_files)}")
+    if args.apply:
+        print("⚠ Убедитесь, что GSA закрыт — иначе он затрёт правки при выходе.")
+    print("─" * 60)
+
+    done = 0
+    for prj_path in prj_files:
+        try:
+            prj = Prj.load(prj_path)
+        except OSError as exc:
+            print(f"  ✖ {prj_path.name}: не прочитан ({exc})")
+            continue
+        old_n = len(prj.list_keys("email accounts"))
+        lines = em.build_account_lines(count, provider, domains, used=set())
+        prj.replace_section("email accounts", lines)
+        done += 1
+        print(f"  {'+ ' if args.apply else '(dry) '}{prj_path.name}: почт {old_n} → {count}")
+        if args.apply:
+            if not args.no_backup:
+                prj_path.with_suffix(".prj.bak").write_bytes(prj_path.read_bytes())
+            prj.save(prj_path)
+
+    print("─" * 60)
+    verb = "обновлено" if args.apply else "будет обновлено"
+    print(f"Итог: {verb} проектов {done} из {len(prj_files)}")
+    if not args.apply and done:
+        print("Повторите с --apply, чтобы записать (GSA должен быть закрыт).")
+
+
 def cmd_settings(cfg: dict, args) -> None:
     """Массовая правка настроек в .prj: [Options], [engines] и т.п.
 
@@ -679,6 +732,10 @@ def main() -> None:
     ap.add_argument("--out", help="папка вывода (--create)")
     ap.add_argument("--limit", type=int, default=0, help="макс. целей (--create)")
     ap.add_argument("--force", action="store_true", help="перезаписать (--create)")
+    ap.add_argument("--emails", action="store_true",
+                    help="обновить [email accounts] в .prj свежими почтами")
+    ap.add_argument("--count", type=int, default=0,
+                    help="почт на проект (--emails; по умолчанию emails_per_project)")
     ap.add_argument("--settings", action="store_true",
                     help="массовая правка настроек .prj ([Options]/[engines])")
     ap.add_argument("--set", action="append", default=[], metavar="СЕКЦИЯ:ключ=значение",
@@ -705,6 +762,9 @@ def main() -> None:
         return
     if args.create:
         cmd_create(cfg, args)
+        return
+    if args.emails:
+        cmd_emails(cfg, args)
         return
     if args.settings:
         cmd_settings(cfg, args)

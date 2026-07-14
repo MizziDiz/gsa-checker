@@ -70,6 +70,19 @@ python gsa_checker.py --create --name Brave-0001 --url https://site/ \
 Импорт: скопировать созданные файлы в `gsa_projects_dir` (при закрытом GSA) или
 импортировать через GSA. Заливка emails/статей — как и раньше через `fill_gsa_emails`/Spin-generator.
 
+### Обновление почт (`--emails`)
+Перегенерирует секцию `[email accounts]` в `.prj` свежими почтами (уникальный набор на
+проект, `emails_per_project` штук, провайдер `email_provider_ini`). Формат нативный для
+GSA — разделитель один байт `0xFF` (в отличие от `fill_gsa_emails`, где символ `ÿ` под
+UTF-8 давал два байта). Остальное в `.prj` не трогает. Сухой прогон по умолчанию,
+`--apply` пишет с бэкапом `.prj.bak`; `--only`/`--count` — фильтр/переопределение.
+```
+python gsa_checker.py --emails --count 20                # превью по всем проектам
+python gsa_checker.py --emails --only fr --apply          # обновить французские
+```
+> ⚠ Делать при **закрытом GSA** (как `--settings`). Провайдер (`*.email.ini`) должен
+> существовать в настройках GSA.
+
 ### Массовая правка настроек (`--settings`)
 Меняет `[Options]`/`[engines]` в пачке `.prj` (`lib/prj.py` — построчный редактор,
 round-trip байт-в-байт, сохраняет спин-синтаксис и разделитель `0xFF` в аккаунтах).

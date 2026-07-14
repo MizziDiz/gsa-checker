@@ -103,7 +103,14 @@ python gsa_checker.py --autopilot            # превью
 python gsa_checker.py --autopilot --apply     # дозалить (GSA подхватит после рефреша UI)
 ```
 Дальше:
-- [ ] обновление почт в проектах (иногда), рефреш/активация в UI (`lib/ui.py`).
+- [x] обновление почт — команда `--emails` (нативный формат `0xFF`, см. ниже);
+- [ ] рефреш/активация проектов в UI после дозаливки (`lib/ui.py`).
+
+### 6b. Обновление почт (`--emails`)  ✅ ГОТОВО
+Перегенерирует `[email accounts]` свежими почтами (`emails_per_project`, провайдер
+`email_provider_ini`) в нативном формате GSA — разделитель один байт `0xFF` (порт
+`fill_gsa_emails`, но без бага двухбайтового `ÿ`). `lib/emails.py` + `Prj.replace_section`.
+Сухой прогон/`--apply`+бэкап/`--only`/`--count`. При закрытом GSA.
 
 ### 7. Встраивание в конвейер
 keygen → A-Parser → `for_gsa_ser` → **gsa-checker создаёт проекты** — замкнуть цикл,

@@ -134,6 +134,19 @@ class Prj:
         self.lines.insert(insert_at, f"{key}={value}")
         return None
 
+    def replace_section(self, section: str, body_lines: list[str]) -> None:
+        """Заменяет тело секции (всё после заголовка до следующей секции) на
+        body_lines. Заголовок сохраняется. Если секции нет — добавляет в конец."""
+        bounds = self._section_bounds(section)
+        if not bounds:
+            if self.lines and self.lines[-1].strip() != "":
+                self.lines.append("")
+            self.lines.append(f"[{section}]")
+            self.lines.extend(body_lines)
+            return
+        start, end = bounds
+        self.lines[start + 1:end] = body_lines
+
     def list_keys(self, section: str) -> list[str]:
         bounds = self._section_bounds(section)
         if not bounds:

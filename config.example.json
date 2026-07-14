@@ -13,6 +13,9 @@
 
   "gsa_template_prj": "C:\\A-GSA\\templates\\template.prj",
   "create_out_dir": "C:\\A-GSA\\created",
+  "emails_per_project": 20,
+  "email_provider_ini": "Generator.email.ini",
+  "email_domains": [],
   "input_share_dir": "\\\\SERVER1\\share\\for_gsa_ser",
   "import_settle_min": 2,
 
