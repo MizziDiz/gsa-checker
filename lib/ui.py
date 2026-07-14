@@ -79,7 +79,7 @@ def ui_check(cfg, data_dir: Path) -> None:
 
     out = data_dir / "ui_controls.txt"
     data_dir.mkdir(parents=True, exist_ok=True)
-    depth = int(cfg.get("ui_dump_depth", 3) or 3)
+    depth = int(cfg.get("ui_dump_depth", 6) or 6)
     with out.open("w", encoding="utf-8") as fh, contextlib.redirect_stdout(fh):
         try:
             win.print_control_identifiers(depth=depth)
@@ -87,6 +87,33 @@ def ui_check(cfg, data_dir: Path) -> None:
             fh.write(f"print_control_identifiers упал: {e}\n")
     print(f"Дерево контролов (depth={depth}) записано в {out}")
     print("Пришлите этот файл — по нему настрою грид проектов и пункт меню рефреша.")
+    if backend == "uia":
+        print("Если грид/меню не видны (только Pane) — GSA рисует их сам. Сравните с "
+              "win32-бэкендом: добавьте в конфиг \"ui_backend\": \"win32\" и повторите "
+              "--ui-check (Delphi-контролы и меню часто видны там лучше).")
+
+
+def _find_grid(win, cfg):
+    """Грид проектов. auto_id у GSA — это HWND (меняется при запуске), поэтому по
+    умолчанию ищем по геометрии: самая большая панель в верхней части окна. Явный
+    ui_grid_auto_id можно задать, если стабилен."""
+    aid = cfg.get("ui_grid_auto_id")
+    if aid:
+        return win.child_window(auto_id=str(aid))
+    try:
+        wr = win.rectangle()
+        top_limit = wr.top + wr.height() * 0.7      # верхние ~70% окна
+        best, best_area = None, 0
+        for p in win.descendants(control_type="Pane"):
+            r = p.rectangle()
+            if r.top > top_limit:
+                continue
+            area = r.width() * r.height()
+            if area > best_area:
+                best, best_area = p, area
+        return best or win
+    except Exception:
+        return win
 
 
 def refresh(cfg, log) -> bool:
@@ -105,10 +132,11 @@ def refresh(cfg, log) -> bool:
 
     try:
         win.set_focus()
-        # грид проектов: по имени контрола из конфига, иначе всё окно
-        grid_name = cfg.get("ui_grid_auto_id") or cfg.get("ui_grid_title")
-        grid = win.child_window(auto_id=grid_name) if cfg.get("ui_grid_auto_id") else (
-            win.child_window(title=grid_name) if grid_name else win)
+        grid = _find_grid(win, cfg)      # по геометрии (auto_id GSA = нестабильный HWND)
+        try:
+            grid.click_input()           # фокус в грид, чтобы Ctrl+A/меню шли туда
+        except Exception:
+            pass
 
         if cfg.get("ui_select_all", True):
             grid.type_keys("^a", set_foreground=True)
