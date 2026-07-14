@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+"""
+lib/ui.py — UI-автоматизация GSA SER через pywinauto (только Windows).
+
+Назначение: после файловой дозаливки целей (--autopilot) «толкнуть» GSA, чтобы он
+подхватил новые цели — обновить интерфейс / убедиться, что проекты активны.
+
+pywinauto импортируется ЛЕНИВО внутри функций: на Linux (машина разработки) модуль
+недоступен, но остальные команды gsa-checker от этого не страдают.
+
+Порядок ввода в строй:
+  1. На Windows-сервере с ЗАПУЩЕННЫМ GSA:  pip install pywinauto
+  2. python gsa_checker.py --ui-check   → выгрузит структуру окна в data/ui_controls.txt
+  3. по дампу настраиваем ui_* ключи (грид проектов, пункт меню), затем --ui-refresh.
+
+Все селекторы вынесены в конфиг (ui_window_title, ui_backend, ui_context_item,
+ui_refresh_keys, ui_select_all) — под конкретный билд GSA, без правки кода.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import re
+import sys
+from pathlib import Path
+
+
+def _require_pywinauto():
+    try:
+        import pywinauto  # noqa: F401
+    except ImportError:
+        sys.exit("pywinauto не установлен. На Windows-сервере: pip install pywinauto\n"
+                 "(на Linux эта команда не работает — GSA UI есть только на Windows).")
+
+
+def _connect(cfg):
+    """Подключается к запущенному GSA, возвращает (app, main_window)."""
+    from pywinauto import Application
+    backend = cfg.get("ui_backend", "uia")
+    title = cfg.get("ui_window_title", "GSA Search Engine Ranker")
+    pattern = f".*{re.escape(title)}.*"
+    timeout = int(cfg.get("ui_connect_timeout", 15) or 15)
+    app = Application(backend=backend).connect(title_re=pattern, timeout=timeout)
+    win = app.window(title_re=pattern)
+    return app, win
+
+
+def ui_check(cfg, data_dir: Path) -> None:
+    """Диагностика: перечисляет окна GSA и выгружает дерево контролов главного окна
+    в data/ui_controls.txt (по нему настраиваем селекторы рефреша)."""
+    _require_pywinauto()
+    from pywinauto import Desktop
+    backend = cfg.get("ui_backend", "uia")
+    title = cfg.get("ui_window_title", "GSA Search Engine Ranker")
+
+    print(f"backend: {backend}  |  ищем окно ~ «{title}»")
+    matches = []
+    for w in Desktop(backend=backend).windows():
+        try:
+            t = w.window_text()
+        except Exception:
+            continue
+        if title.lower() in (t or "").lower():
+            matches.append(t)
+    print(f"подходящих окон: {len(matches)}")
+    for t in matches:
+        print(f"  • {t}")
+    if not matches:
+        print("Окно GSA не найдено. Запущен ли GSA? Совпадает ли ui_window_title "
+              "с заголовком окна? Попробуйте ui_backend=\"win32\".")
+        return
+
+    try:
+        _app, win = _connect(cfg)
+        win.set_focus()
+    except Exception as e:
+        print(f"Не удалось подключиться: {type(e).__name__}: {e}")
+        return
+
+    out = data_dir / "ui_controls.txt"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    depth = int(cfg.get("ui_dump_depth", 3) or 3)
+    with out.open("w", encoding="utf-8") as fh, contextlib.redirect_stdout(fh):
+        try:
+            win.print_control_identifiers(depth=depth)
+        except Exception as e:
+            fh.write(f"print_control_identifiers упал: {e}\n")
+    print(f"Дерево контролов (depth={depth}) записано в {out}")
+    print("Пришлите этот файл — по нему настрою грид проектов и пункт меню рефреша.")
+
+
+def refresh(cfg, log) -> bool:
+    """«Толкает» GSA, чтобы подхватил новые цели. Шаги управляются конфигом:
+      ui_select_all   — выделить все проекты (Ctrl+A) перед действием;
+      ui_context_item — пункт контекстного меню (правый клик по гриду), напр. "Active";
+      ui_refresh_keys — доп. клавиши в конце (напр. "{F5}").
+    Возвращает True при успехе. Пока каркас: точные селекторы доводятся по --ui-check.
+    """
+    _require_pywinauto()
+    try:
+        _app, win = _connect(cfg)
+    except Exception as e:
+        log.error(f"ui: не подключились к GSA: {type(e).__name__}: {e}")
+        return False
+
+    try:
+        win.set_focus()
+        # грид проектов: по имени контрола из конфига, иначе всё окно
+        grid_name = cfg.get("ui_grid_auto_id") or cfg.get("ui_grid_title")
+        grid = win.child_window(auto_id=grid_name) if cfg.get("ui_grid_auto_id") else (
+            win.child_window(title=grid_name) if grid_name else win)
+
+        if cfg.get("ui_select_all", True):
+            grid.type_keys("^a", set_foreground=True)
+
+        item = cfg.get("ui_context_item", "")
+        if item:
+            # правый клик по гриду → выбрать пункт меню по тексту
+            try:
+                grid.right_click_input()
+            except Exception:
+                win.right_click_input()
+            from pywinauto import Desktop
+            menu = Desktop(backend=cfg.get("ui_backend", "uia")).window(
+                best_match="Context", control_type="Menu")
+            menu.child_window(title=item, control_type="MenuItem").click_input()
+
+        keys = cfg.get("ui_refresh_keys", "")
+        if keys:
+            win.type_keys(keys, set_foreground=True)
+
+        log.info(f"ui: рефреш выполнен (select_all={cfg.get('ui_select_all', True)}, "
+                 f"item={item or '—'}, keys={keys or '—'})")
+        return True
+    except Exception as e:
+        log.error(f"ui: рефреш не удался: {type(e).__name__}: {e}. "
+                  "Проверьте селекторы (--ui-check).")
+        return False

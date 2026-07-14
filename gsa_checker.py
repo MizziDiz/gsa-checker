@@ -732,6 +732,10 @@ def main() -> None:
     ap.add_argument("--out", help="папка вывода (--create)")
     ap.add_argument("--limit", type=int, default=0, help="макс. целей (--create)")
     ap.add_argument("--force", action="store_true", help="перезаписать (--create)")
+    ap.add_argument("--ui-check", action="store_true",
+                    help="диагностика окна GSA (pywinauto) → data/ui_controls.txt")
+    ap.add_argument("--ui-refresh", action="store_true",
+                    help="толкнуть GSA подхватить новые цели (pywinauto)")
     ap.add_argument("--emails", action="store_true",
                     help="обновить [email accounts] в .prj свежими почтами")
     ap.add_argument("--count", type=int, default=0,
@@ -762,6 +766,16 @@ def main() -> None:
         return
     if args.create:
         cmd_create(cfg, args)
+        return
+    if args.ui_check:
+        from lib import ui
+        ui.ui_check(cfg, DATA_DIR)
+        return
+    if args.ui_refresh:
+        import logging
+        logging.basicConfig(level=logging.INFO, format="%(message)s")
+        from lib import ui
+        ui.refresh(cfg, logging.getLogger("gsa_checker"))
         return
     if args.emails:
         cmd_emails(cfg, args)

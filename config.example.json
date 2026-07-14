@@ -11,6 +11,12 @@
 
   "gsa_ui_title": "GSA Search Engine Ranker",
 
+  "ui_window_title": "GSA Search Engine Ranker",
+  "ui_backend": "uia",
+  "ui_select_all": true,
+  "ui_context_item": "",
+  "ui_refresh_keys": "",
+
   "gsa_template_prj": "C:\\A-GSA\\templates\\template.prj",
   "create_out_dir": "C:\\A-GSA\\created",
   "emails_per_project": 20,
