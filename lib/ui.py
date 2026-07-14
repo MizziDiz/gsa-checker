@@ -116,31 +116,46 @@ def _find_grid(win, cfg):
         return win
 
 
-def _click_menu_item(app, win, target, backend, item, log, delay=0.4) -> bool:
-    """Правый клик по target → клик пункта меню по тексту. При неудаче закрывает
-    меню (Esc) и возвращает False. Работает и с uia, и с win32 (#32768)."""
+def _click_menu_path(app, win, target, backend, path, log, delay=0.4) -> bool:
+    """Правый клик по target → проход по пути меню (с подменю), напр.
+    ["Set Status", "Inactive"]. Верхнее из списка Menu берём как активное (чтобы
+    не ловить AmbiguousError при открытом подменю). Esc чистит залипшее меню."""
     import time
     from pywinauto import Desktop
+
+    def menus():
+        return Desktop(backend=backend).windows(control_type="Menu")
+
+    try:
+        win.type_keys("{ESC}")           # на всякий случай закрыть прежнее меню
+    except Exception:
+        pass
+    time.sleep(0.15)
     try:
         target.right_click_input()
     except Exception:
         win.right_click_input()
     time.sleep(delay)
     try:
-        if backend == "win32":
-            menu = app.window(class_name="#32768")
-            menu.menu_item(item).click_input()
-        else:
-            menu = Desktop(backend="uia").window(control_type="Menu")
-            menu.child_window(title=item, control_type="MenuItem").click_input()
-        log.info(f"ui: пункт меню «{item}» нажат")
+        ms = menus()
+        if not ms:
+            raise RuntimeError("контекстное меню не появилось")
+        node = ms[-1]
+        for i, name in enumerate(path):
+            item = node.child_window(title=name, control_type="MenuItem")
+            item.click_input()
+            time.sleep(delay)
+            if i < len(path) - 1:        # раскрылось подменю — берём верхнее
+                ms = menus()
+                node = ms[-1] if ms else node
+        log.info(f"ui: меню {' → '.join(path)} — ок")
         return True
     except Exception as e:
         try:
-            win.type_keys("{ESC}")
+            win.type_keys("{ESC}{ESC}")
         except Exception:
             pass
-        log.error(f"ui: пункт меню «{item}» не найден: {type(e).__name__}: {e}")
+        log.error(f"ui: меню {' → '.join(path)} не пройдено: {type(e).__name__}: {e}")
         return False
 
 
@@ -169,27 +184,26 @@ def refresh(cfg, log) -> bool:
         except Exception:
             pass
 
-        # 1) ПКМ → refresh
-        ok = _click_menu_item(app, win, grid, backend,
-                              cfg.get("ui_refresh_item", "refresh"), log, delay)
+        # 1) ПКМ → Refresh
+        ok = _click_menu_path(app, win, grid, backend,
+                              [cfg.get("ui_refresh_item", "Refresh")], log, delay)
 
-        # 2) тумблер статуса одного проекта
+        # 2) тумблер статуса одного проекта через подменю "Set Status"
         if cfg.get("ui_toggle_status", True):
             from pywinauto import mouse
             r = grid.rectangle()
             off = cfg.get("ui_row_offset", [30, 25])
             row_xy = (r.left + int(off[0]), r.top + int(off[1]))
+            status_menu = cfg.get("ui_status_menu", "Set Status")
             mouse.click(coords=row_xy)           # выбрать первую строку проекта
             time.sleep(0.3)
-            # ПКМ по выбранной строке; статус off, затем on
-            grid_at_row = grid
-            _click_menu_item(app, win, grid_at_row, backend,
-                             cfg.get("ui_status_off", "Inactive"), log, delay)
+            _click_menu_path(app, win, grid, backend,
+                             [status_menu, cfg.get("ui_status_off", "Inactive")], log, delay)
             time.sleep(0.3)
             mouse.click(coords=row_xy)
             time.sleep(0.2)
-            _click_menu_item(app, win, grid_at_row, backend,
-                             cfg.get("ui_status_on", "Active"), log, delay)
+            _click_menu_path(app, win, grid, backend,
+                             [status_menu, cfg.get("ui_status_on", "Active")], log, delay)
 
         keys = cfg.get("ui_refresh_keys", "")
         if keys:

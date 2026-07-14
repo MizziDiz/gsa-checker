@@ -13,8 +13,9 @@
 
   "ui_window_title": "GSA Search Engine Ranker",
   "ui_backend": "uia",
-  "ui_refresh_item": "refresh",
+  "ui_refresh_item": "Refresh",
   "ui_toggle_status": true,
+  "ui_status_menu": "Set Status",
   "ui_status_off": "Inactive",
   "ui_status_on": "Active",
   "ui_row_offset": [30, 25],
