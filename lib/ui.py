@@ -116,23 +116,48 @@ def _find_grid(win, cfg):
         return win
 
 
-def _find_menu_item(backend, name):
-    """Ищет пункт меню по тексту среди ВСЕХ открытых меню (в т.ч. подменю).
-    Через .descendants(MenuItem) — у MenuWrapper из .windows() нет child_window."""
+def _iter_menu_specs(backend):
+    """Открытые меню как WindowSpecification (по индексу; ловит и подменю)."""
     from pywinauto import Desktop
-    for menu in Desktop(backend=backend).windows(control_type="Menu"):
+    specs = []
+    for idx in range(6):
+        m = Desktop(backend=backend).window(control_type="Menu", found_index=idx)
         try:
-            items = menu.descendants(control_type="MenuItem")
+            if not m.exists():
+                break
         except Exception:
-            continue
-        for it in items:
+            break
+        specs.append(m)
+    return specs
+
+
+def _find_menu_item(backend, name):
+    """Пункт меню по тексту среди открытых меню. child_window(MenuItem) на
+    WindowSpecification (у MenuWrapper из .windows() нет child_window)."""
+    for m in _iter_menu_specs(backend):
+        for crit in (dict(title=name), dict(title_re=f"^{re.escape(name)}.*")):
             try:
-                t = (it.window_text() or "").strip()
+                item = m.child_window(control_type="MenuItem", **crit)
+                if item.exists():
+                    return item
             except Exception:
-                continue
-            if t == name or t.startswith(name):
-                return it
+                pass
     return None
+
+
+def _dump_menu_items(backend, log):
+    """Логирует реальные тексты пунктов открытого меню — для диагностики названий."""
+    labels = []
+    for m in _iter_menu_specs(backend):
+        try:
+            for ch in m.wrapper_object().children():
+                t = (ch.window_text() or "").strip()
+                if t:
+                    labels.append(t)
+        except Exception:
+            pass
+    log.error("ui: пункты открытого меню: "
+              + (" | ".join(labels) if labels else "(прочитать не удалось / меню закрыто)"))
 
 
 def _click_menu_path(app, win, target, backend, path, log, delay=0.4) -> bool:
@@ -163,6 +188,7 @@ def _click_menu_path(app, win, target, backend, path, log, delay=0.4) -> bool:
                     break
                 time.sleep(0.2)
             if item is None:
+                _dump_menu_items(backend, log)   # покажем реальные названия
                 raise RuntimeError(f"пункт «{name}» не найден в меню")
             item.click_input()
             time.sleep(delay)
