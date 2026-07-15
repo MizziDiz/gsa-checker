@@ -482,10 +482,104 @@ def _append_targets_file(dest: Path, body: bytes) -> None:
         f.write(prefix + body)
 
 
+def _load_consumed_batches() -> set:
+    """Имена батчей, уже разобранных автопилотом (перенесённых в used)."""
+    consumed = set()
+    if AUTOPILOT_JOURNAL.exists():
+        for line in AUTOPILOT_JOURNAL.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("action") == "batch" and "batch" in rec:
+                consumed.add(rec["batch"])
+    return consumed
+
+
+def _email_reminder(cfg: dict, telegram) -> None:
+    """Раз в email_reminder_days шлёт в Telegram напоминание обновить почты (сами
+    почты не трогаем при работающем GSA)."""
+    import time
+    state = load_state()
+    days = float(cfg.get("email_reminder_days", 30) or 30)
+    now = time.time()
+    last = state.get("email_reminder_ts")
+    if last is None:
+        state["email_reminder_ts"] = now
+    elif (now - last) >= days * 86400:
+        if telegram.send(cfg, "📧 <b>Пора обновить почты</b>\nЗакройте GSA и выполните:\n"
+                              "python gsa_checker.py --emails --apply"):
+            state["email_reminder_ts"] = now
+    save_state(state)
+
+
+def _distribute(cfg, projects_dir, eligible, selected, ext, apply, total_bytes, telegram) -> None:
+    """Собирает цели из выбранных батчей (дедуп) и раздаёт ПОРОВНУ по проектам."""
+    seen, targets = set(), []
+    for f in selected:
+        with f.open(encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                u = line.strip()
+                if u and u not in seen:
+                    seen.add(u)
+                    targets.append(u)
+    n = len(eligible)
+    names = ", ".join(f.name for f in selected[:5]) + (" …" if len(selected) > 5 else "")
+    print(f"Батчи ({len(selected)}, ~{total_bytes/1048576:.0f} МБ): {names}")
+    print(f"Целей {len(targets):,} → поровну на {n} проект(ов) (~{len(targets)//n if n else 0:,}/проект)")
+    if not targets:
+        print("Целей нет — пропуск.")
+        return
+
+    print(f"── автопилот: {'ЗАПИСЬ' if apply else 'СУХОЙ ПРОГОН (добавьте --apply)'} ──")
+    for i, r in enumerate(eligible):
+        chunk = targets[i::n]                       # round-robin — ровная раздача
+        if not chunk:
+            continue
+        dest = projects_dir / f"{r['name']}{ext}"
+        if apply:
+            _append_targets_file(dest, ("\n".join(chunk) + "\n").encode("utf-8"))
+        print(f"  {'+ ' if apply else '(dry) '}{r['name']}: +{len(chunk):,} → "
+              f"{dest.name} (было {r['remaining']:,})")
+
+    if not apply:
+        return
+    # перенос разобранных батчей в used + журнал
+    import shutil
+    used_dir = Path(cfg.get("autopilot_used_dir")
+                    or (selected[0].parent.parent / "Aparser results used"))
+    used_dir.mkdir(parents=True, exist_ok=True)
+    for f in selected:
+        try:
+            shutil.move(str(f), str(used_dir / f.name))
+        except OSError as e:
+            print(f"⚠ не перенесён {f.name}: {e}", file=sys.stderr)
+        _append_journal({"action": "batch", "batch": f.name})
+    # один рефреш GSA в конце
+    try:
+        import logging
+        logging.basicConfig(level=logging.INFO, format="%(message)s")
+        from lib import ui
+        ui.refresh(cfg, logging.getLogger("gsa_checker"))
+    except SystemExit:
+        print("⚠ рефреш пропущен (pywinauto не установлен / не Windows).")
+    except Exception as e:
+        print(f"⚠ рефреш не удался: {e}", file=sys.stderr)
+    telegram.send(cfg, f"🤖 <b>Автопилот</b>\n{len(targets):,} целей поровну в {n} "
+                       f"проект(ов) (~{len(targets)//n:,}/проект), батчей {len(selected)}. "
+                       "Рефреш выполнен.")
+
+
 def cmd_autopilot(cfg: dict, args) -> None:
-    """Общий пул: при малом остатке берёт новейший неиспользованный батч из пула и
-    ДОПИСЫВАЕТ его цели в проекты ниже порога (данные не стирает). Идемпотентно по
-    журналу (батч→проект). По умолчанию сухой прогон; запись — с --apply."""
+    """Server-9 модель: равномерно раздаёт цели из общего пула в АКТИВНЫЕ проекты
+    (исключая имена из autopilot_exclude_names — по имени, т.к. `last status` в .prj не
+    различает active/inactive). При остатке ниже autopilot_min_targets берёт новейшие
+    неиспользованные батчи из пула (до autopilot_batch_limit_mb суммарно), делит их цели
+    ПОРОВНУ (каждому свой кусок, данные не стирает), переносит батчи в autopilot_used_dir
+    и при --apply делает один --ui-refresh. Раз в месяц — напоминание обновить почты."""
     from lib import telegram
 
     projects_dir = Path(cfg.get("gsa_projects_dir", ""))
@@ -493,73 +587,56 @@ def cmd_autopilot(cfg: dict, args) -> None:
         sys.exit(f"Папка проектов не найдена: {projects_dir}")
     pool = Path(cfg.get("autopilot_pool_dir") or cfg.get("input_share_dir", ""))
     if not pool.is_dir():
-        sys.exit(f"Папка-пул батчей не найдена: {pool} "
-                 "(задайте autopilot_pool_dir или input_share_dir).")
+        sys.exit(f"Папка-пул батчей не найдена: {pool}")
     threshold = float(cfg.get("autopilot_min_targets",
                               cfg.get("low_targets_threshold", 0)) or 0)
     if threshold <= 0:
-        sys.exit("Порог не задан: autopilot_min_targets или low_targets_threshold.")
+        sys.exit("Порог не задан: autopilot_min_targets.")
     ext = cfg.get("autopilot_append_ext", ".new_targets")
-    limit = int(cfg.get("autopilot_batch_limit", 0) or 0)
-    max_proj = int(cfg.get("autopilot_max_projects", 0) or 0)
     apply = args.apply
 
     data = collect_stats(cfg)
     for err in data["errors"]:
         print(f"⚠ {err}", file=sys.stderr)
-    low = sorted((r for r in data["projects"] if r["remaining"] < threshold),
-                 key=lambda r: r["remaining"])
-    if max_proj:
-        low = low[:max_proj]
-    print(f"Порог {int(threshold):,}: проектов ниже — {len(low)}")
-    if not low:
-        print("Все проекты выше порога — дозаливка не нужна.")
-        return
 
-    applied = _load_applied()
-    # новейший батч, который получил ещё не каждый low-проект.
-    # Файлы фильтруем по autopilot_batch_glob (в пуле бывают служебные .txt).
-    batch_glob = cfg.get("autopilot_batch_glob", "*.txt")
-    children = [c for c in pool.iterdir()
-                if c.is_dir() or (c.suffix.lower() == ".txt"
-                                  and fnmatch.fnmatch(c.name, batch_glob))]
-    children.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    batch = next((c for c in children
-                  if any((c.name, r["name"]) not in applied for r in low)), None)
-    if batch is None:
-        msg = ("🟡 <b>Автопилот</b>\nПроектам мало целей, но свежих неиспользованных "
-               "батчей в пуле нет — нужны новые списки.")
-        print("Свежих неиспользованных батчей нет — нужны новые списки.")
-        if apply:
-            telegram.send(cfg, msg)
-        return
+    excl = [e.lower() for e in as_list(cfg.get("autopilot_exclude_names",
+                                               ["CC", "TEST", "Common"]))]
+    eligible = sorted((r for r in data["projects"]
+                       if not any(e in r["name"].lower() for e in excl)),
+                      key=lambda r: r["name"])
+    print(f"Проектов всего {len(data['projects'])}, кормим {len(eligible)} "
+          f"(исключаем содержащие: {', '.join(excl) or '—'})")
 
-    targets = _read_targets(batch, limit)
-    print(f"Батч: {batch.name}  ({len(targets):,} целей)")
-    if not targets:
-        print("Батч пустой — пропуск.")
-        return
-    body = ("\n".join(targets) + "\n").encode("utf-8")
+    if eligible:
+        min_left = min(r["remaining"] for r in eligible)
+        if min_left >= threshold:
+            print(f"Мин. остаток {min_left:,} ≥ порога {int(threshold):,} — дозаливка не нужна.")
+        else:
+            consumed = _load_consumed_batches()
+            cap = int(float(cfg.get("autopilot_batch_limit_mb", 120) or 120) * 1024 * 1024)
+            glob = cfg.get("autopilot_batch_glob", "*.txt")
+            files = sorted((c for c in pool.iterdir()
+                            if c.is_file() and c.suffix.lower() == ".txt"
+                            and fnmatch.fnmatch(c.name, glob) and c.name not in consumed),
+                           key=lambda p: p.stat().st_mtime, reverse=True)
+            selected, total = [], 0
+            for f in files:
+                selected.append(f)
+                total += f.stat().st_size
+                if total >= cap:
+                    break
+            if not selected:
+                print("Свежих неиспользованных батчей нет — нужны новые списки.")
+                if apply:
+                    telegram.send(cfg, "🟡 <b>Автопилот</b>\nПроектам мало целей, но свежих "
+                                       "батчей в пуле нет — нужны новые списки.")
+            else:
+                _distribute(cfg, projects_dir, eligible, selected, ext, apply, total, telegram)
+    else:
+        print("Нет подходящих проектов (все исключены).")
 
-    done = []
-    for r in low:
-        if (batch.name, r["name"]) in applied:
-            continue
-        dest = projects_dir / f"{r['name']}{ext}"
-        if apply:
-            _append_targets_file(dest, body)
-            _append_journal({"action": "append", "batch": batch.name,
-                             "project": r["name"], "count": len(targets)})
-        done.append(r["name"])
-        tag = "+ " if apply else "(dry) "
-        print(f"  {tag}{r['name']}: +{len(targets):,} → {dest.name} (было {r['remaining']:,})")
-
-    mode = "ЗАПИСЬ" if apply else "СУХОЙ ПРОГОН (добавьте --apply)"
-    print(f"[{mode}] дозалито проектов: {len(done)} из батча {batch.name}")
-    if apply and done:
-        telegram.send(cfg, f"🤖 <b>Автопилот</b>\nБатч {batch.name}: +{len(targets):,} "
-                           f"целей в {len(done)} проект(ов).\n⚠ обновите интерфейс GSA, "
-                           "чтобы он подхватил новые цели.")
+    if apply:
+        _email_reminder(cfg, telegram)
 
 
 def cmd_emails(cfg: dict, args) -> None:

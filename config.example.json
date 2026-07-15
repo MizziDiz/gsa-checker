@@ -43,11 +43,13 @@
   "heartbeat_hours": 6,
 
   "autopilot_pool_dir": "\\\\10.10.10.50\\шара\\Aparser results",
+  "autopilot_used_dir": "\\\\10.10.10.50\\шара\\Aparser results used",
   "autopilot_batch_glob": "*.txt",
-  "autopilot_min_targets": 5000,
+  "autopilot_min_targets": 20000,
+  "autopilot_batch_limit_mb": 120,
   "autopilot_append_ext": ".new_targets",
-  "autopilot_batch_limit": 0,
-  "autopilot_max_projects": 0,
+  "autopilot_exclude_names": ["CC", "TEST", "Common"],
+  "email_reminder_days": 30,
 
   "stats_snapshots": true,
   "eta_window_min": 180,
