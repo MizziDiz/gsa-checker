@@ -205,7 +205,7 @@ def augment_velocity(cfg: dict, data: dict, record: bool = True) -> None:
 CCTLD_COUNTRY = {
     "ru": "Russia", "ua": "Ukraine", "by": "Belarus", "kz": "Kazakhstan",
     "pl": "Poland", "de": "Germany", "fr": "France", "es": "Spain", "it": "Italy",
-    "nl": "Netherlands", "be": "Belgium", "uk": "UK", "co": "Colombia",
+    "nl": "Netherlands", "be": "Belgium", "uk": "UK", "gb": "UK", "co": "Colombia",
     "br": "Brazil", "mx": "Mexico", "ar": "Argentina", "cl": "Chile", "pe": "Peru",
     "us": "USA", "ca": "Canada", "au": "Australia", "in": "India", "id": "Indonesia",
     "cn": "China", "jp": "Japan", "kr": "Korea", "tr": "Turkey", "ir": "Iran",
@@ -219,15 +219,22 @@ GTLDS = {"com", "net", "org", "info", "biz", "xyz", "online", "site", "shop",
 _HOST_RE = re.compile(r"https?://([^/:]+)", re.I)
 
 
-def _country_from_url(url: str) -> str:
-    """Страна по ccTLD домена verified-ссылки. gTLD (com/net/…) → '', иначе код."""
+def _country_of(url: str, geo: dict | None) -> tuple[str, str]:
+    """(страна, источник) для verified-ссылки. Сначала ccTLD (как в GSA); для gTLD —
+    если задан geo, добираем по IP-GeoIP. Источник: 'tld' | 'ip'."""
     m = _HOST_RE.search(url or "")
     if not m:
-        return ""
-    tld = m.group(1).rsplit(".", 1)[-1].lower()
-    if tld in GTLDS:
-        return "gTLD"
-    return CCTLD_COUNTRY.get(tld, tld.upper())
+        return "", "—"
+    host = m.group(1)
+    tld = host.rsplit(".", 1)[-1].lower()
+    if tld not in GTLDS:
+        return CCTLD_COUNTRY.get(tld, tld.upper()), "tld"
+    if geo:                                          # gTLD → пробуем GeoIP по IP
+        from lib import geoip
+        code = geoip.country_iso(host, geo["db"], geo["cache"], geo["timeout"])
+        if code:
+            return CCTLD_COUNTRY.get(code.lower(), code.upper()), "ip"
+    return "gTLD", "tld"
 
 
 def _parse_success(raw: bytes):
@@ -254,6 +261,20 @@ def cmd_export(cfg: dict, args) -> None:
     globs = as_list(cfg.get("verified_glob", ["*.success"]))
     dry = getattr(args, "dry_run", False)
     full = getattr(args, "full", False)
+
+    # GeoIP для gTLD-доменов (страна не из ccTLD, а по IP) — опционально
+    geo = None
+    geo_db = cfg.get("geoip_db", "")
+    if geo_db:
+        from lib import geoip
+        if geoip.available(geo_db):
+            geo_cache_path = DATA_DIR / "geoip_cache.json"
+            geo = {"db": geo_db, "cache": geoip.load_cache(geo_cache_path),
+                   "timeout": float(cfg.get("geoip_timeout", 3) or 3),
+                   "path": geo_cache_path}
+        else:
+            print("⚠ GeoIP отключён: нет базы geoip_db или не установлен maxminddb "
+                  "(pip install maxminddb). Страна только по ccTLD.", file=sys.stderr)
 
     state = load_state()
     offsets = state.setdefault("export_offsets", {})
@@ -282,11 +303,15 @@ def cmd_export(cfg: dict, args) -> None:
                 url, date, engine, typ, anchor, target = _parse_success(raw)
                 if not url:
                     continue
-                rows.append({"project": base, "country": _country_from_url(url),
+                country, src = _country_of(url, geo)
+                rows.append({"project": base, "country": country, "country_src": src,
                              "url": url, "date": date, "engine": engine,
                              "type": typ, "anchor": anchor, "target": target})
                 per_proj[base] = per_proj.get(base, 0) + 1
 
+    if geo:                                        # сохранить накопленный GeoIP-кэш
+        from lib import geoip
+        geoip.save_cache(geo["path"], geo["cache"])
     print(f"Новых verified-ссылок: {len(rows)} из {len(per_proj)} проект(ов)")
     if not rows:
         print("Новых результатов нет.")
@@ -295,7 +320,7 @@ def cmd_export(cfg: dict, args) -> None:
         return
     if dry:
         for r in rows[:8]:
-            print(f"  [{r['country']}] {r['project']}: {r['url'][:70]}")
+            print(f"  [{r['country']}/{r['country_src']}] {r['project']}: {r['url'][:66]}")
         print("(dry-run: CSV не пишется, офсеты не двигаются)")
         return
 
@@ -303,7 +328,8 @@ def cmd_export(cfg: dict, args) -> None:
     fname = (f"gsa_verified_{cfg.get('server_name', 'gsa')}_"
              f"{time.strftime('%Y-%m-%d_%H%M%S')}.csv")
     out = export_dir / fname
-    cols = ["project", "country", "url", "date", "engine", "type", "anchor", "target"]
+    cols = ["project", "country", "country_src", "url", "date",
+            "engine", "type", "anchor", "target"]
     with out.open("w", newline="", encoding="utf-8-sig") as fh:
         w = csv.DictWriter(fh, fieldnames=cols)
         w.writeheader()

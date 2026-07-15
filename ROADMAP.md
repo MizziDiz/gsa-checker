@@ -85,10 +85,12 @@ python gsa_checker.py --create --name Brave-0001 --url https://site/ \
 ## 📋 Дальше
 
 ### 4b. Выгрузка результатов (`--export`)  ✅ ГОТОВО
-Verified-ссылки из `.success` → CSV со страной (по ccTLD) в `export_dir` на шаре.
-Инкрементально (офсет в state — только новое). Колонки project/country/url/date/
-engine/type/anchor/target; `--dry-run`/`--full`; сводка по странам + Telegram.
-Аналог autosend, но для результатов GSA. Планировщик — раз в день.
+Verified-ссылки из `.success` → CSV в `export_dir` на шаре. Инкрементально (офсет в
+state — только новое). Страна: **ccTLD как в GSA** (подтверждено: Sven, forum 11666),
+для gTLD — добор по **IP-GeoIP** (`lib/geoip.py`, MaxMind GeoLite2, `geoip_db`, кэш
+`data/geoip_cache.json`); колонка `country_src`=tld/ip. Колонки project/country/
+country_src/url/date/engine/type/anchor/target; `--dry-run`/`--full`; сводка по странам
++ Telegram. Планировщик — раз в день.
 
 ### 5. Telegram-уведомления + heartbeat  ✅ ГОТОВО (базовое)
 `lib/telegram.py` (порт из Aparser-checker: прямая отправка / прокси / релей).
