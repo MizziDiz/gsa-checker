@@ -143,8 +143,10 @@ def refresh(cfg, log) -> bool:
     _require_pywinauto()
     import time
     from pywinauto import mouse
-    delay = float(cfg.get("ui_menu_delay", 0.4) or 0.4)
-    pause = float(cfg.get("ui_key_pause", 0.06) or 0.06)
+    delay = float(cfg.get("ui_menu_delay", 0.5) or 0.5)
+    pause = float(cfg.get("ui_key_pause", 0.25) or 0.25)   # пауза между клавишами:
+    #   критично, чтобы подменю успело раскрыться до {DOWN}/{ENTER}
+    gap = float(cfg.get("ui_status_gap", 1.2) or 1.2)      # между Inactive и Active
     try:
         app, win = _connect(cfg)
     except Exception as e:
@@ -169,7 +171,7 @@ def refresh(cfg, log) -> bool:
         if cfg.get("ui_toggle_status", True):
             _menu_keys(row_xy, cfg.get("ui_status_off_seq", "{HOME}{RIGHT}{DOWN}{ENTER}"),
                        pause, delay, log, "Set Status → Inactive")
-            time.sleep(0.3)
+            time.sleep(gap)          # дать GSA применить Inactive до возврата в Active
             _menu_keys(row_xy, cfg.get("ui_status_on_seq", "{HOME}{RIGHT}{ENTER}"),
                        pause, delay, log, "Set Status → Active")
         return ok
