@@ -116,20 +116,33 @@ def _find_grid(win, cfg):
         return win
 
 
-def _menu_keys(row_xy, seq, pause, delay, log, label):
-    """Открывает контекстное меню (ПКМ по строке) и шлёт клавиатурную
-    последовательность seq (меню owner-drawn, UIA его не видит — управляем клавишами).
-    Пустой seq пропускается."""
+def _menu_action(focus_xy, seq, opts, log, label):
+    """Выполняет один шаг меню на ОДНОМ выбранном проекте:
+      1) клик в грид (фокус) → select_keys (напр. {HOME}{DOWN} — встать на 1-й проект,
+         минуя строку категории);
+      2) открыть контекстное меню на выбранном проекте (open_key={APPS}), либо ПКМ по
+         координате, если open_key пустой;
+      3) послать seq (навигация по меню).
+    Так меню применяется к проекту, а не к категории. Пустой seq пропускается."""
     import time
     from pywinauto import mouse, keyboard
+    pause, delay, select_keys, open_key = opts
     if not seq:
-        log.info(f"ui: шаг «{label}» пропущен (последовательность не задана)")
+        log.info(f"ui: шаг «{label}» пропущен (последовательность пуста)")
         return False
-    mouse.right_click(coords=row_xy)
+    mouse.click(coords=focus_xy)                 # фокус в грид
+    time.sleep(0.3)
+    if open_key:
+        if select_keys:
+            keyboard.send_keys(select_keys, pause=pause)   # выбрать проект
+            time.sleep(0.25)
+        keyboard.send_keys(open_key, pause=pause)          # {APPS} → меню на проекте
+    else:
+        mouse.right_click(coords=focus_xy)
     time.sleep(delay)
     keyboard.send_keys(seq, pause=pause)
     time.sleep(delay)
-    log.info(f"ui: шаг «{label}» — послано {seq}")
+    log.info(f"ui: шаг «{label}» — выбор [{select_keys or 'ПКМ'}] → меню {seq}")
     return True
 
 
@@ -158,22 +171,24 @@ def refresh(cfg, log) -> bool:
         grid = _find_grid(win, cfg)
         r = grid.rectangle()
         off = cfg.get("ui_row_offset", [30, 25])
-        row_xy = (r.left + int(off[0]), r.top + int(off[1]))
-        log.info(f"ui: грид {r.width()}x{r.height()} @({r.left},{r.top}); ПКМ по {row_xy}")
-        mouse.click(coords=row_xy)                 # выбрать строку проекта
-        time.sleep(0.3)
+        focus_xy = (r.left + int(off[0]), r.top + int(off[1]))
+        select_keys = cfg.get("ui_select_keys", "{HOME}{DOWN}")   # 1-й проект (мимо категории)
+        open_key = cfg.get("ui_open_menu_key", "{APPS}")          # меню на выбранном проекте
+        opts = (pause, delay, select_keys, open_key)
+        log.info(f"ui: грид {r.width()}x{r.height()} @({r.left},{r.top}); "
+                 f"фокус {focus_xy}; выбор {select_keys!r}; меню {open_key!r}")
 
-        # 1) Refresh (по умолчанию последний пункт меню: {UP}{ENTER})
-        ok = _menu_keys(row_xy, cfg.get("ui_refresh_seq", "{UP}{ENTER}"),
-                        pause, delay, log, "Refresh")
+        # 1) Refresh (последний пункт меню)
+        ok = _menu_action(focus_xy, cfg.get("ui_refresh_seq", "{UP}{ENTER}"),
+                          opts, log, "Refresh")
 
-        # 2) тумблер статуса: Set Status (1-й пункт) → подменю Active(1)/Inactive(2)
+        # 2) тумблер статуса ОДНОГО проекта: Set Status → Inactive, затем → Active
         if cfg.get("ui_toggle_status", True):
-            _menu_keys(row_xy, cfg.get("ui_status_off_seq", "{DOWN}{RIGHT}{DOWN}{ENTER}"),
-                       pause, delay, log, "Set Status → Inactive")
+            _menu_action(focus_xy, cfg.get("ui_status_off_seq", "{DOWN}{RIGHT}{DOWN}{ENTER}"),
+                         opts, log, "Set Status → Inactive")
             time.sleep(gap)          # дать GSA применить Inactive до возврата в Active
-            _menu_keys(row_xy, cfg.get("ui_status_on_seq", "{DOWN}{RIGHT}{ENTER}"),
-                       pause, delay, log, "Set Status → Active")
+            _menu_action(focus_xy, cfg.get("ui_status_on_seq", "{DOWN}{RIGHT}{ENTER}"),
+                         opts, log, "Set Status → Active")
         return ok
     except Exception as e:
         log.error(f"ui: рефреш не удался: {type(e).__name__}: {e}")
