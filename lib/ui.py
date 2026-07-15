@@ -169,10 +169,10 @@ def refresh(cfg, log) -> bool:
 
         # 2) тумблер статуса: Set Status (1-й пункт) → подменю Active(1)/Inactive(2)
         if cfg.get("ui_toggle_status", True):
-            _menu_keys(row_xy, cfg.get("ui_status_off_seq", "{HOME}{RIGHT}{DOWN}{ENTER}"),
+            _menu_keys(row_xy, cfg.get("ui_status_off_seq", "{DOWN}{RIGHT}{DOWN}{ENTER}"),
                        pause, delay, log, "Set Status → Inactive")
             time.sleep(gap)          # дать GSA применить Inactive до возврата в Active
-            _menu_keys(row_xy, cfg.get("ui_status_on_seq", "{HOME}{RIGHT}{ENTER}"),
+            _menu_keys(row_xy, cfg.get("ui_status_on_seq", "{DOWN}{RIGHT}{ENTER}"),
                        pause, delay, log, "Set Status → Active")
         return ok
     except Exception as e:
