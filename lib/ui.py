@@ -116,94 +116,35 @@ def _find_grid(win, cfg):
         return win
 
 
-def _iter_menu_specs(backend):
-    """Открытые меню как WindowSpecification (по индексу; ловит и подменю)."""
-    from pywinauto import Desktop
-    specs = []
-    for idx in range(6):
-        m = Desktop(backend=backend).window(control_type="Menu", found_index=idx)
-        try:
-            if not m.exists():
-                break
-        except Exception:
-            break
-        specs.append(m)
-    return specs
-
-
-def _find_menu_item(backend, name):
-    """Пункт меню по тексту среди открытых меню. child_window(MenuItem) на
-    WindowSpecification (у MenuWrapper из .windows() нет child_window)."""
-    for m in _iter_menu_specs(backend):
-        for crit in (dict(title=name), dict(title_re=f"^{re.escape(name)}.*")):
-            try:
-                item = m.child_window(control_type="MenuItem", **crit)
-                if item.exists():
-                    return item
-            except Exception:
-                pass
-    return None
-
-
-def _dump_menu_items(backend, log):
-    """Логирует реальные тексты пунктов открытого меню — для диагностики названий."""
-    labels = []
-    for m in _iter_menu_specs(backend):
-        try:
-            w = m.wrapper_object()
-            kids = list(w.children()) + list(w.descendants(control_type="MenuItem"))
-            for ch in kids:
-                t = (ch.window_text() or "").strip()
-                if t and t not in labels:
-                    labels.append(t)
-        except Exception:
-            pass
-    log.error("ui: пункты открытого меню: "
-              + (" | ".join(labels) if labels else "(меню не найдено — ПКМ его не открыл)"))
-
-
-def _click_menu_path(win, coords, backend, path, log, delay=0.4) -> bool:
-    """Правый клик по КООРДИНАТЕ (строка проекта) → проход по пути меню (с подменю),
-    напр. ["Set Status", "Inactive"]. Пункты ищем по тексту среди открытых меню."""
+def _menu_keys(row_xy, seq, pause, delay, log, label):
+    """Открывает контекстное меню (ПКМ по строке) и шлёт клавиатурную
+    последовательность seq (меню owner-drawn, UIA его не видит — управляем клавишами).
+    Пустой seq пропускается."""
     import time
-    from pywinauto import mouse
-    mouse.right_click(coords=coords)      # детерминированно открывает контекстное меню
-    time.sleep(delay)
-    try:
-        for name in path:
-            item = None
-            for _ in range(15):           # ждём появления пункта/подменю (~3 c)
-                item = _find_menu_item(backend, name)
-                if item:
-                    break
-                time.sleep(0.2)
-            if item is None:
-                _dump_menu_items(backend, log)
-                raise RuntimeError(f"пункт «{name}» не найден в меню")
-            item.click_input()
-            time.sleep(delay)
-        log.info(f"ui: меню {' → '.join(path)} — ок")
-        return True
-    except Exception as e:
-        try:
-            win.type_keys("{ESC}{ESC}")
-        except Exception:
-            pass
-        log.error(f"ui: меню {' → '.join(path)} не пройдено: {type(e).__name__}: {e}")
+    from pywinauto import mouse, keyboard
+    if not seq:
+        log.info(f"ui: шаг «{label}» пропущен (последовательность не задана)")
         return False
+    mouse.right_click(coords=row_xy)
+    time.sleep(delay)
+    keyboard.send_keys(seq, pause=pause)
+    time.sleep(delay)
+    log.info(f"ui: шаг «{label}» — послано {seq}")
+    return True
 
 
 def refresh(cfg, log) -> bool:
-    """Повторяет ручной рефреш GSA:
-      1) ПКМ по гриду → пункт `ui_refresh_item` (по умолчанию "refresh");
-      2) тумблер статуса одного проекта Active→Inactive→Active (чтобы всё перечиталось):
-         выбрать первую строку и дважды дёрнуть статус через пункты
-         `ui_status_off`/`ui_status_on`.
-    Все тексты/координаты — в конфиге. Возвращает True, если шаг 1 удался."""
+    """Повторяет ручной рефреш GSA КЛАВИАТУРОЙ (меню owner-drawn, UIA его не видит):
+      1) ПКМ по строке проекта → `ui_refresh_seq` (по умолч. {UP}{ENTER} = последний
+         пункт "Refresh");
+      2) тумблер статуса: ПКМ → `ui_status_off_seq`, затем ПКМ → `ui_status_on_seq`
+         (проход по подменю "Set Status" клавишами; задаётся в конфиге).
+    Координаты строки — `ui_row_offset`. Возвращает True, если шаг 1 отправлен."""
     _require_pywinauto()
     import time
+    from pywinauto import mouse
     delay = float(cfg.get("ui_menu_delay", 0.4) or 0.4)
-    backend = cfg.get("ui_backend", "uia")
+    pause = float(cfg.get("ui_key_pause", 0.06) or 0.06)
     try:
         app, win = _connect(cfg)
     except Exception as e:
@@ -211,39 +152,27 @@ def refresh(cfg, log) -> bool:
         return False
 
     try:
-        from pywinauto import mouse
         win.set_focus()
         grid = _find_grid(win, cfg)
         r = grid.rectangle()
         off = cfg.get("ui_row_offset", [30, 25])
-        row_xy = (r.left + int(off[0]), r.top + int(off[1]))   # точка в строке проекта
-        log.info(f"ui: грид {r.width()}x{r.height()} @({r.left},{r.top}); "
-                 f"ПКМ по {row_xy}")
+        row_xy = (r.left + int(off[0]), r.top + int(off[1]))
+        log.info(f"ui: грид {r.width()}x{r.height()} @({r.left},{r.top}); ПКМ по {row_xy}")
         mouse.click(coords=row_xy)                 # выбрать строку проекта
         time.sleep(0.3)
 
-        # 1) ПКМ → Refresh
-        ok = _click_menu_path(win, row_xy, backend,
-                              [cfg.get("ui_refresh_item", "Refresh")], log, delay)
+        # 1) Refresh (по умолчанию последний пункт меню: {UP}{ENTER})
+        ok = _menu_keys(row_xy, cfg.get("ui_refresh_seq", "{UP}{ENTER}"),
+                        pause, delay, log, "Refresh")
 
-        # 2) тумблер статуса одного проекта через подменю "Set Status"
+        # 2) тумблер статуса (последовательности задаются в конфиге)
         if cfg.get("ui_toggle_status", True):
-            status_menu = cfg.get("ui_status_menu", "Set Status")
-            mouse.click(coords=row_xy)
+            _menu_keys(row_xy, cfg.get("ui_status_off_seq", ""),
+                       pause, delay, log, "Set Status → Inactive")
             time.sleep(0.3)
-            _click_menu_path(win, row_xy, backend,
-                             [status_menu, cfg.get("ui_status_off", "Inactive")], log, delay)
-            time.sleep(0.3)
-            mouse.click(coords=row_xy)
-            time.sleep(0.2)
-            _click_menu_path(win, row_xy, backend,
-                             [status_menu, cfg.get("ui_status_on", "Active")], log, delay)
-
-        keys = cfg.get("ui_refresh_keys", "")
-        if keys:
-            win.type_keys(keys, set_foreground=True)
+            _menu_keys(row_xy, cfg.get("ui_status_on_seq", ""),
+                       pause, delay, log, "Set Status → Active")
         return ok
     except Exception as e:
-        log.error(f"ui: рефреш не удался: {type(e).__name__}: {e}. "
-                  "Сверьте пункты меню по --ui-check (win32).")
+        log.error(f"ui: рефреш не удался: {type(e).__name__}: {e}")
         return False
