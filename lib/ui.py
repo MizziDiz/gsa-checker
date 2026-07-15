@@ -173,7 +173,7 @@ def refresh(cfg, log) -> bool:
         off = cfg.get("ui_row_offset", [30, 25])
         focus_xy = (r.left + int(off[0]), r.top + int(off[1]))
         select_keys = cfg.get("ui_select_keys", "{HOME}{DOWN}")   # 1-й проект (мимо категории)
-        open_key = cfg.get("ui_open_menu_key", "{APPS}")          # меню на выбранном проекте
+        open_key = cfg.get("ui_open_menu_key", "{VK_APPS}")       # меню на выбранном проекте
         opts = (pause, delay, select_keys, open_key)
         log.info(f"ui: грид {r.width()}x{r.height()} @({r.left},{r.top}); "
                  f"фокус {focus_xy}; выбор {select_keys!r}; меню {open_key!r}")

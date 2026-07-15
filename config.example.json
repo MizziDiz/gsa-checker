@@ -15,7 +15,7 @@
   "ui_backend": "uia",
   "ui_row_offset": [30, 25],
   "ui_select_keys": "{HOME}{DOWN}",
-  "ui_open_menu_key": "{APPS}",
+  "ui_open_menu_key": "{VK_APPS}",
   "ui_menu_delay": 0.5,
   "ui_key_pause": 0.25,
   "ui_status_gap": 1.2,
