@@ -18,8 +18,8 @@
   "ui_key_pause": 0.06,
   "ui_refresh_seq": "{UP}{ENTER}",
   "ui_toggle_status": true,
-  "ui_status_off_seq": "",
-  "ui_status_on_seq": "",
+  "ui_status_off_seq": "{HOME}{RIGHT}{DOWN}{ENTER}",
+  "ui_status_on_seq": "{HOME}{RIGHT}{ENTER}",
 
   "gsa_template_prj": "C:\\A-GSA\\templates\\template.prj",
   "create_out_dir": "C:\\A-GSA\\created",

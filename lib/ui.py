@@ -165,12 +165,12 @@ def refresh(cfg, log) -> bool:
         ok = _menu_keys(row_xy, cfg.get("ui_refresh_seq", "{UP}{ENTER}"),
                         pause, delay, log, "Refresh")
 
-        # 2) тумблер статуса (последовательности задаются в конфиге)
+        # 2) тумблер статуса: Set Status (1-й пункт) → подменю Active(1)/Inactive(2)
         if cfg.get("ui_toggle_status", True):
-            _menu_keys(row_xy, cfg.get("ui_status_off_seq", ""),
+            _menu_keys(row_xy, cfg.get("ui_status_off_seq", "{HOME}{RIGHT}{DOWN}{ENTER}"),
                        pause, delay, log, "Set Status → Inactive")
             time.sleep(0.3)
-            _menu_keys(row_xy, cfg.get("ui_status_on_seq", ""),
+            _menu_keys(row_xy, cfg.get("ui_status_on_seq", "{HOME}{RIGHT}{ENTER}"),
                        pause, delay, log, "Set Status → Active")
         return ok
     except Exception as e:
