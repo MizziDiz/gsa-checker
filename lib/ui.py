@@ -150,45 +150,35 @@ def _dump_menu_items(backend, log):
     labels = []
     for m in _iter_menu_specs(backend):
         try:
-            for ch in m.wrapper_object().children():
+            w = m.wrapper_object()
+            kids = list(w.children()) + list(w.descendants(control_type="MenuItem"))
+            for ch in kids:
                 t = (ch.window_text() or "").strip()
-                if t:
+                if t and t not in labels:
                     labels.append(t)
         except Exception:
             pass
     log.error("ui: пункты открытого меню: "
-              + (" | ".join(labels) if labels else "(прочитать не удалось / меню закрыто)"))
+              + (" | ".join(labels) if labels else "(меню не найдено — ПКМ его не открыл)"))
 
 
-def _click_menu_path(app, win, target, backend, path, log, delay=0.4) -> bool:
-    """Правый клик по target → проход по пути меню (с подменю), напр.
-    ["Set Status", "Inactive"]. Пункты ищем по тексту среди открытых меню."""
+def _click_menu_path(win, coords, backend, path, log, delay=0.4) -> bool:
+    """Правый клик по КООРДИНАТЕ (строка проекта) → проход по пути меню (с подменю),
+    напр. ["Set Status", "Inactive"]. Пункты ищем по тексту среди открытых меню."""
     import time
-    try:
-        win.type_keys("{ESC}")           # закрыть прежнее меню, если залипло
-    except Exception:
-        pass
-    time.sleep(0.2)
-    try:
-        win.set_focus()
-        target.right_click_input()
-    except Exception:
-        try:
-            win.right_click_input()
-        except Exception as e:
-            log.error(f"ui: правый клик не удался: {type(e).__name__}: {e}")
-            return False
+    from pywinauto import mouse
+    mouse.right_click(coords=coords)      # детерминированно открывает контекстное меню
     time.sleep(delay)
     try:
         for name in path:
             item = None
-            for _ in range(15):          # ждём появления пункта/подменю (~3 c)
+            for _ in range(15):           # ждём появления пункта/подменю (~3 c)
                 item = _find_menu_item(backend, name)
                 if item:
                     break
                 time.sleep(0.2)
             if item is None:
-                _dump_menu_items(backend, log)   # покажем реальные названия
+                _dump_menu_items(backend, log)
                 raise RuntimeError(f"пункт «{name}» не найден в меню")
             item.click_input()
             time.sleep(delay)
@@ -221,32 +211,32 @@ def refresh(cfg, log) -> bool:
         return False
 
     try:
+        from pywinauto import mouse
         win.set_focus()
         grid = _find_grid(win, cfg)
-        try:
-            grid.click_input()
-        except Exception:
-            pass
+        r = grid.rectangle()
+        off = cfg.get("ui_row_offset", [30, 25])
+        row_xy = (r.left + int(off[0]), r.top + int(off[1]))   # точка в строке проекта
+        log.info(f"ui: грид {r.width()}x{r.height()} @({r.left},{r.top}); "
+                 f"ПКМ по {row_xy}")
+        mouse.click(coords=row_xy)                 # выбрать строку проекта
+        time.sleep(0.3)
 
         # 1) ПКМ → Refresh
-        ok = _click_menu_path(app, win, grid, backend,
+        ok = _click_menu_path(win, row_xy, backend,
                               [cfg.get("ui_refresh_item", "Refresh")], log, delay)
 
         # 2) тумблер статуса одного проекта через подменю "Set Status"
         if cfg.get("ui_toggle_status", True):
-            from pywinauto import mouse
-            r = grid.rectangle()
-            off = cfg.get("ui_row_offset", [30, 25])
-            row_xy = (r.left + int(off[0]), r.top + int(off[1]))
             status_menu = cfg.get("ui_status_menu", "Set Status")
-            mouse.click(coords=row_xy)           # выбрать первую строку проекта
+            mouse.click(coords=row_xy)
             time.sleep(0.3)
-            _click_menu_path(app, win, grid, backend,
+            _click_menu_path(win, row_xy, backend,
                              [status_menu, cfg.get("ui_status_off", "Inactive")], log, delay)
             time.sleep(0.3)
             mouse.click(coords=row_xy)
             time.sleep(0.2)
-            _click_menu_path(app, win, grid, backend,
+            _click_menu_path(win, row_xy, backend,
                              [status_menu, cfg.get("ui_status_on", "Active")], log, delay)
 
         keys = cfg.get("ui_refresh_keys", "")
