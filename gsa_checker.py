@@ -25,8 +25,10 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import re
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -198,6 +200,122 @@ def augment_velocity(cfg: dict, data: dict, record: bool = True) -> None:
         r["vel"] = statsdb.velocity(con, r["name"], window, now=now)
     statsdb.prune(con, float(cfg.get("stats_retention_days", 30) or 0), now=now)
     con.close()
+
+
+CCTLD_COUNTRY = {
+    "ru": "Russia", "ua": "Ukraine", "by": "Belarus", "kz": "Kazakhstan",
+    "pl": "Poland", "de": "Germany", "fr": "France", "es": "Spain", "it": "Italy",
+    "nl": "Netherlands", "be": "Belgium", "uk": "UK", "co": "Colombia",
+    "br": "Brazil", "mx": "Mexico", "ar": "Argentina", "cl": "Chile", "pe": "Peru",
+    "us": "USA", "ca": "Canada", "au": "Australia", "in": "India", "id": "Indonesia",
+    "cn": "China", "jp": "Japan", "kr": "Korea", "tr": "Turkey", "ir": "Iran",
+    "vn": "Vietnam", "th": "Thailand", "my": "Malaysia", "ph": "Philippines",
+    "pt": "Portugal", "cz": "Czechia", "sk": "Slovakia", "ro": "Romania",
+    "hu": "Hungary", "gr": "Greece", "se": "Sweden", "no": "Norway", "fi": "Finland",
+    "dk": "Denmark", "at": "Austria", "ch": "Switzerland", "za": "South Africa",
+}
+GTLDS = {"com", "net", "org", "info", "biz", "xyz", "online", "site", "shop",
+         "dev", "app", "io", "co", "top", "club", "pro", "me", "tv", "cc"}
+_HOST_RE = re.compile(r"https?://([^/:]+)", re.I)
+
+
+def _country_from_url(url: str) -> str:
+    """Страна по ccTLD домена verified-ссылки. gTLD (com/net/…) → '', иначе код."""
+    m = _HOST_RE.search(url or "")
+    if not m:
+        return ""
+    tld = m.group(1).rsplit(".", 1)[-1].lower()
+    if tld in GTLDS:
+        return "gTLD"
+    return CCTLD_COUNTRY.get(tld, tld.upper())
+
+
+def _parse_success(raw: bytes):
+    """Строка .success (поля через 0xFF) → (url, date, engine, type, anchor, target)."""
+    f = [p.decode("utf-8", "replace") for p in raw.split(b"\xff")]
+    while len(f) < 5:
+        f.append("")
+    return f[0], f[1], f[2], f[3], f[4], (f[-1] if len(f) > 5 else "")
+
+
+def cmd_export(cfg: dict, args) -> None:
+    """Выгрузка verified-результатов (`.success`) в CSV со страной (по ccTLD) на шару.
+    Инкрементально: по офсету в state читает только новые строки с прошлого прогона.
+    По умолчанию пишет; --dry-run — превью без записи и без сдвига офсета; --full —
+    выгрузить весь `.success` (офсет всё равно сдвигается в конец)."""
+    import csv
+    import time
+    from lib import telegram
+
+    projects_dir = Path(cfg.get("gsa_projects_dir", ""))
+    if not projects_dir.is_dir():
+        sys.exit(f"Папка проектов не найдена: {projects_dir}")
+    export_dir = Path(cfg.get("export_dir") or (DATA_DIR / "export"))
+    globs = as_list(cfg.get("verified_glob", ["*.success"]))
+    dry = getattr(args, "dry_run", False)
+    full = getattr(args, "full", False)
+
+    state = load_state()
+    offsets = state.setdefault("export_offsets", {})
+    rows, per_proj = [], {}
+    for prj in sorted(projects_dir.glob("*.prj")):
+        base = prj.stem
+        for pattern in globs:
+            sf = projects_dir / f"{base}{pattern.lstrip('*')}"
+            if not sf.is_file():
+                continue
+            size = sf.stat().st_size
+            start = 0 if full else offsets.get(base, 0)
+            if start > size:                       # файл усечён/ротирован
+                start = 0
+            if start >= size:
+                offsets[base] = size
+                continue
+            with sf.open("rb") as fh:
+                fh.seek(start)
+                chunk = fh.read()
+            offsets[base] = size
+            for raw in chunk.split(b"\n"):
+                raw = raw.rstrip(b"\r")
+                if not raw:
+                    continue
+                url, date, engine, typ, anchor, target = _parse_success(raw)
+                if not url:
+                    continue
+                rows.append({"project": base, "country": _country_from_url(url),
+                             "url": url, "date": date, "engine": engine,
+                             "type": typ, "anchor": anchor, "target": target})
+                per_proj[base] = per_proj.get(base, 0) + 1
+
+    print(f"Новых verified-ссылок: {len(rows)} из {len(per_proj)} проект(ов)")
+    if not rows:
+        print("Новых результатов нет.")
+        if not dry:
+            save_state(state)                      # зафиксировать офсеты (файлы дочитаны)
+        return
+    if dry:
+        for r in rows[:8]:
+            print(f"  [{r['country']}] {r['project']}: {r['url'][:70]}")
+        print("(dry-run: CSV не пишется, офсеты не двигаются)")
+        return
+
+    export_dir.mkdir(parents=True, exist_ok=True)
+    fname = (f"gsa_verified_{cfg.get('server_name', 'gsa')}_"
+             f"{time.strftime('%Y-%m-%d_%H%M%S')}.csv")
+    out = export_dir / fname
+    cols = ["project", "country", "url", "date", "engine", "type", "anchor", "target"]
+    with out.open("w", newline="", encoding="utf-8-sig") as fh:
+        w = csv.DictWriter(fh, fieldnames=cols)
+        w.writeheader()
+        w.writerows(rows)
+    save_state(state)                              # офсеты — только после успешной записи
+    top = ", ".join(f"{c}:{n}" for c, n in
+                    sorted(Counter(r["country"] for r in rows).items(),
+                           key=lambda kv: -kv[1])[:5])
+    print(f"✓ выгружено {len(rows):,} ссылок → {out}")
+    print(f"  по странам (топ-5): {top}")
+    telegram.send(cfg, f"📤 <b>Экспорт verified</b>\n{len(rows):,} новых ссылок "
+                       f"из {len(per_proj)} проект(ов)\nтоп стран: {top}\n→ {export_dir}")
 
 
 def cmd_notify(cfg: dict, args) -> None:
@@ -791,6 +909,10 @@ def main() -> None:
                     help="диагностика путей и файлов")
     ap.add_argument("--stats", action="store_true",
                     help="снимок статистики по проектам (остаток/verified/…)")
+    ap.add_argument("--export", action="store_true",
+                    help="выгрузить verified-результаты в CSV (страна по ccTLD) на шару")
+    ap.add_argument("--full", action="store_true",
+                    help="для --export: весь .success, а не только новое")
     ap.add_argument("--notify", action="store_true",
                     help="уведомления в Telegram (мало целей + heartbeat)")
     ap.add_argument("--test-telegram", action="store_true",
@@ -835,6 +957,9 @@ def main() -> None:
     if args.test_telegram:
         from lib import telegram
         raise SystemExit(telegram.test_telegram(cfg))
+    if args.export:
+        cmd_export(cfg, args)
+        return
     if args.notify:
         cmd_notify(cfg, args)
         return

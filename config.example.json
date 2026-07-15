@@ -30,6 +30,7 @@
   "email_provider_ini": "Generator.email.ini",
   "email_domains": [],
   "input_share_dir": "\\\\SERVER1\\share\\for_gsa_ser",
+  "export_dir": "\\\\10.10.10.50\\шара\\GSA verified export",
   "import_settle_min": 2,
 
   "telegram_bot_token": "123456:ABC-ВАШ_ТОКЕН_БОТА",
