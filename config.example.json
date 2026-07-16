@@ -27,7 +27,8 @@
   "ui_export_menu_seq": "{UP}{UP}{RIGHT}{DOWN}{DOWN}{DOWN}{DOWN}{DOWN}{DOWN}{RIGHT}{UP}{ENTER}",
   "ui_export_trigger_seq": "{ENTER}",
   "ui_export_dialog_wait": 2.0,
-  "ui_export_settle_sec": 20,
+  "ui_export_settle_sec": 30,
+  "ui_export_stable_checks": 3,
 
   "gsa_template_prj": "C:\\A-GSA\\templates\\template.prj",
   "create_out_dir": "C:\\A-GSA\\created",

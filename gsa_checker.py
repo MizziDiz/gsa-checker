@@ -272,18 +272,31 @@ def cmd_report(cfg: dict, args) -> None:
             gp = DATA_DIR / "geoip_cache.json"
             geo = {"db": geo_db, "cache": geoip.load_cache(gp), "path": gp}
 
+    if not files:
+        print(f"CSV не найдено в {src} (нет *.csv).")
+        return
+
     counts = Counter()
     total = filled = rows_read = 0
     for f in files:
+        size = f.stat().st_size
         with f.open(encoding="utf-8-sig", newline="") as fh:
-            reader = csv.reader(fh)
+            sample = fh.read(8192)
+            fh.seek(0)
+            try:
+                delim = csv.Sniffer().sniff(sample, delimiters=",;\t").delimiter
+            except csv.Error:
+                delim = ","          # шапка в одну колонку и т.п. — дефолт запятая
+            reader = csv.reader(fh, delimiter=delim)
             header = next(reader, None)
             if not header:
+                print(f"⚠ {f.name}: пустой файл ({size:,} байт) — пропуск", file=sys.stderr)
                 continue
             ic = _find_col(header, "Country")
             ii = _find_col(header, "IP")
             if ic < 0:
-                print(f"⚠ нет колонки Country в {f.name} — пропуск", file=sys.stderr)
+                print(f"⚠ {f.name} ({size:,} байт, разделитель {delim!r}): нет колонки "
+                      f"Country. Шапка: {header}", file=sys.stderr)
                 continue
             for row in reader:
                 if len(row) <= ic:
@@ -305,7 +318,10 @@ def cmd_report(cfg: dict, args) -> None:
         geoip.save_cache(geo["path"], geo["cache"])
 
     if not total:
-        print("Строк не найдено.")
+        info = ", ".join(f"{f.name}={f.stat().st_size:,}б" for f in files)
+        print(f"Строк не найдено. Прочитано файлов: {len(files)} ({info}). "
+              f"Если размер ~0 — GSA ещё дописывал отчёт (перезапусти --report по файлу) "
+              f"или экспорт был пустой (проверь, что ^a выделил все проекты).")
         return
     ordered = counts.most_common()
     ns = counts.get("not_stated", 0)
