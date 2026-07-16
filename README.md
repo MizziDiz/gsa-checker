@@ -157,6 +157,24 @@ python gsa_checker.py --export --full      # весь .success, а не толь
 ```
 Ставить в планировщик (напр. раз в день). CSV в `utf-8-sig` (открывается в Excel).
 
+### Статистика по странам для добора (`--report`)
+Читает **verified-CSV, выгруженный из GSA** (в нём уже есть колонки `Country` — GSA
+ставит её по IP-геолокации — и `IP`), раскладывает ссылки по **страновым бакетам ровно
+той же логикой, что твой `Split/select-v1.py`** (`lib/buckets.py` — `COUNTRY_BUCKETS` +
+`REGION_RULES`, 1:1), считает по каждому бакету и **шлёт сводку в Telegram**. Дальше ты
+решаешь, сколько добрать из какого бакета — сам добор делает твой `select_links_by_targets`.
+
+Строки, у которых GSA не определил страну (бакет `not_stated`), **добираются по IP
+локально** через GeoIP (`geoip_db`, MaxMind/DB-IP `.mmdb`) — **без DNS**, IP уже в CSV,
+поэтому лимитов нет и работает мгновенно (~пара сотен gTLD в неделю).
+```
+python gsa_checker.py --report --csv "\\share\GSA verified export\Verified.csv"
+python gsa_checker.py --report            # берёт CSV из report_input (файл или папку с *.csv)
+```
+Пишет отчёт `gsa_report_<server>_<дата>.txt` в `report_out_dir` и шлёт top-15 бакетов +
+итог/`not_stated`/сколько добрал GeoIP в Telegram. CSV читается в `utf-8-sig` (BOM ок),
+колонки ищутся по имени (`Country`/`IP`) без учёта регистра и BOM.
+
 ### Уведомления в Telegram (`--notify`)
 `lib/telegram.py` (прямая отправка, `telegram_proxy` или сервер-релей `telegram_relay_url`).
 Сообщения: остаток < `low_targets_threshold` → «⏳ мало целей», `0` → «🛑 цели кончились»,

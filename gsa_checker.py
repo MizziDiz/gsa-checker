@@ -245,6 +245,90 @@ def _parse_success(raw: bytes):
     return f[0], f[1], f[2], f[3], f[4], (f[-1] if len(f) > 5 else "")
 
 
+def _find_col(header: list, name: str) -> int:
+    clean = [(h or "").strip().lstrip("﻿").lower() for h in header]
+    name = name.strip().lower()
+    return clean.index(name) if name in clean else -1
+
+
+def cmd_report(cfg: dict, args) -> None:
+    """Статистика по verified из GSA-CSV: раскладка по странам-бакетам (логика Split
+    1:1) + добор `not_stated` по IP через GeoIP. Шлёт счётчики по бакетам в Telegram и
+    пишет отчёт в report_out_dir. CSV бери из --csv (файл/папка) или report_input."""
+    import csv
+    from lib import buckets, telegram
+
+    src = Path(args.csv or cfg.get("report_input", ""))
+    if not src.exists():
+        sys.exit(f"CSV/папка не найдена: {src} (--csv ПУТЬ или report_input в конфиге)")
+    files = sorted(src.rglob("*.csv")) if src.is_dir() else [src]
+
+    # GeoIP по IP (без DNS) для not_stated — опционально
+    geo = None
+    geo_db = cfg.get("geoip_db", "")
+    if geo_db:
+        from lib import geoip
+        if geoip.available(geo_db):
+            gp = DATA_DIR / "geoip_cache.json"
+            geo = {"db": geo_db, "cache": geoip.load_cache(gp), "path": gp}
+
+    counts = Counter()
+    total = filled = rows_read = 0
+    for f in files:
+        with f.open(encoding="utf-8-sig", newline="") as fh:
+            reader = csv.reader(fh)
+            header = next(reader, None)
+            if not header:
+                continue
+            ic = _find_col(header, "Country")
+            ii = _find_col(header, "IP")
+            if ic < 0:
+                print(f"⚠ нет колонки Country в {f.name} — пропуск", file=sys.stderr)
+                continue
+            for row in reader:
+                if len(row) <= ic:
+                    continue
+                rows_read += 1
+                key = buckets.resolve_country(row[ic])
+                bucket = buckets.bucket_for_country(key)
+                if bucket == "not_stated" and geo and ii >= 0 and len(row) > ii:
+                    from lib import geoip
+                    name = geoip.country_name_by_ip(row[ii], geo["db"], geo["cache"])
+                    if name:
+                        nb = buckets.bucket_for_country(buckets.resolve_country(name))
+                        if nb != "not_stated":
+                            bucket, filled = nb, filled + 1
+                counts[bucket] += 1
+                total += 1
+    if geo:
+        from lib import geoip
+        geoip.save_cache(geo["path"], geo["cache"])
+
+    if not total:
+        print("Строк не найдено.")
+        return
+    ordered = counts.most_common()
+    ns = counts.get("not_stated", 0)
+    print(f"Строк: {rows_read:,} | бакетов: {len(counts)} | "
+          f"GeoIP-добор not_stated: {filled:,} | осталось not_stated: {ns:,}")
+    print("── бакеты ──")
+    lines = [f"{b:<14} {n:>7,}" for b, n in ordered]
+    for ln in lines:
+        print("  " + ln)
+
+    out_dir = Path(cfg.get("report_out_dir") or (DATA_DIR / "reports"))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y-%m-%d_%H%M%S")
+    rep = out_dir / f"gsa_report_{cfg.get('server_name', 'gsa')}_{stamp}.txt"
+    rep.write_text("\n".join(lines) + f"\n\nИТОГО {total:,} | not_stated {ns:,} | "
+                   f"GeoIP-добор {filled:,}\n", encoding="utf-8")
+    print(f"✓ отчёт: {rep}")
+
+    top = "\n".join(f"{b}: {n:,}" for b, n in ordered[:15])
+    telegram.send(cfg, f"📊 <b>GSA verified — статистика</b>\nвсего {total:,}, "
+                       f"not_stated {ns:,} (GeoIP добрал {filled:,})\n\n{top}")
+
+
 def cmd_export(cfg: dict, args) -> None:
     """Выгрузка verified-результатов (`.success`) в CSV со страной (по ccTLD) на шару.
     Инкрементально: по офсету в state читает только новые строки с прошлого прогона.
@@ -976,6 +1060,9 @@ def main() -> None:
                     help="диагностика путей и файлов")
     ap.add_argument("--stats", action="store_true",
                     help="снимок статистики по проектам (остаток/verified/…)")
+    ap.add_argument("--report", action="store_true",
+                    help="статистика по бакетам стран из GSA verified CSV (+GeoIP по IP)")
+    ap.add_argument("--csv", help="путь к GSA verified CSV или папке (для --report)")
     ap.add_argument("--export", action="store_true",
                     help="выгрузить verified-результаты в CSV (страна по ccTLD) на шару")
     ap.add_argument("--full", action="store_true",
@@ -1024,6 +1111,9 @@ def main() -> None:
     if args.test_telegram:
         from lib import telegram
         raise SystemExit(telegram.test_telegram(cfg))
+    if args.report:
+        cmd_report(cfg, args)
+        return
     if args.export:
         cmd_export(cfg, args)
         return
