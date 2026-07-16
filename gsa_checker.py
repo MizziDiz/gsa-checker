@@ -252,18 +252,34 @@ def _find_col(header: list, name: str) -> int:
 
 
 def cmd_report(cfg: dict, args) -> None:
-    """Статистика по verified из GSA-CSV: раскладка по странам-бакетам (логика Split
-    1:1) + добор `not_stated` по IP через GeoIP. Шлёт счётчики по бакетам в Telegram и
-    пишет отчёт в report_out_dir. CSV бери из --csv (файл/папка) или report_input."""
+    """Статистика по verified из GSA-CSV — ЗАМЕНА ручного split1404. Раскладывает
+    verified-ссылки по странам-бакетам (логика split1404 1:1), инкрементно дописывает
+    новые URL в базу out_country_buckets (`buckets_dir`, дедуп per-file/global/in-run),
+    добивает «Not Stated» по IP через GeoIP, формирует сводку формата debug_summary
+    (страна ВСЕГО (+новых) … ИТОГО), пишет её в report_out_dir и шлёт в Telegram.
+    CSV — из --csv (файл/папка) или report_input."""
     import csv
+    from collections import defaultdict
     from lib import buckets, telegram
 
     src = Path(args.csv or cfg.get("report_input", ""))
     if not src.exists():
         sys.exit(f"CSV/папка не найдена: {src} (--csv ПУТЬ или report_input в конфиге)")
     files = sorted(src.rglob("*.csv")) if src.is_dir() else [src]
+    if not files:
+        print(f"CSV не найдено в {src} (нет *.csv).")
+        return
 
-    # GeoIP по IP (без DNS) для not_stated — опционально
+    bdir = Path(cfg.get("buckets_dir") or (DATA_DIR / "out_country_buckets"))
+    bdir.mkdir(parents=True, exist_ok=True)
+    dry = getattr(args, "dry_run", False)
+
+    # текущая база: множества URL для дедупа + счётчики «было»
+    per_file, global_set = buckets.read_membership(bdir)
+    pre = {fn: buckets.count_nonempty_lines(bdir / fn) for fn, _ in buckets.SUMMARY_ORDER}
+    pre[buckets.NOT_STATED_FILE] = buckets.count_nonempty_lines(bdir / buckets.NOT_STATED_FILE)
+
+    # GeoIP по IP (без DNS) для «Not Stated» — опционально
     geo = None
     geo_db = cfg.get("geoip_db", "")
     if geo_db:
@@ -272,12 +288,12 @@ def cmd_report(cfg: dict, args) -> None:
             gp = DATA_DIR / "geoip_cache.json"
             geo = {"db": geo_db, "cache": geoip.load_cache(gp), "path": gp}
 
-    if not files:
-        print(f"CSV не найдено в {src} (нет *.csv).")
-        return
+    to_append = defaultdict(list)
+    added = defaultdict(int)
+    planned = defaultdict(set)
+    total_rows = nonempty = filled = 0
+    skip_target = skip_global = skip_dup = skip_empty = 0
 
-    counts = Counter()
-    total = filled = rows_read = 0
     for f in files:
         size = f.stat().st_size
         with f.open(encoding="utf-8-sig", newline="") as fh:
@@ -286,63 +302,114 @@ def cmd_report(cfg: dict, args) -> None:
             try:
                 delim = csv.Sniffer().sniff(sample, delimiters=",;\t").delimiter
             except csv.Error:
-                delim = ","          # шапка в одну колонку и т.п. — дефолт запятая
+                delim = ","
             reader = csv.reader(fh, delimiter=delim)
             header = next(reader, None)
             if not header:
                 print(f"⚠ {f.name}: пустой файл ({size:,} байт) — пропуск", file=sys.stderr)
                 continue
             ic = _find_col(header, "Country")
-            ii = _find_col(header, "IP")
-            if ic < 0:
-                print(f"⚠ {f.name} ({size:,} байт, разделитель {delim!r}): нет колонки "
-                      f"Country. Шапка: {header}", file=sys.stderr)
+            iu = _find_col(header, "URL")
+            ip = _find_col(header, "IP")
+            if ic < 0 or iu < 0:
+                print(f"⚠ {f.name} ({size:,} байт, разделитель {delim!r}): нет колонок "
+                      f"Country/URL. Шапка: {header}", file=sys.stderr)
                 continue
             for row in reader:
-                if len(row) <= ic:
+                if len(row) <= max(ic, iu):
                     continue
-                rows_read += 1
-                key = buckets.resolve_country(row[ic])
-                bucket = buckets.bucket_for_country(key)
-                if bucket == "not_stated" and geo and ii >= 0 and len(row) > ii:
+                total_rows += 1
+                url_raw = buckets.norm(row[iu])
+                if not url_raw:
+                    skip_empty += 1
+                    continue
+                nonempty += 1
+                bucket = buckets.bucket_for_country(buckets.resolve_country(row[ic]))
+                if bucket == buckets.NOT_STATED_FILE and geo and ip >= 0 and len(row) > ip:
                     from lib import geoip
-                    name = geoip.country_name_by_ip(row[ii], geo["db"], geo["cache"])
+                    name = geoip.country_name_by_ip(row[ip], geo["db"], geo["cache"])
                     if name:
                         nb = buckets.bucket_for_country(buckets.resolve_country(name))
-                        if nb != "not_stated":
+                        if nb != buckets.NOT_STATED_FILE:
                             bucket, filled = nb, filled + 1
-                counts[bucket] += 1
-                total += 1
+                url_k = buckets.norm_url(url_raw)
+                if url_k in per_file.get(bucket, set()):
+                    skip_target += 1
+                    continue
+                if url_k in global_set:
+                    skip_global += 1
+                    continue
+                if url_k in planned[bucket]:
+                    skip_dup += 1
+                    continue
+                to_append[bucket].append(url_raw)
+                planned[bucket].add(url_k)
+                added[bucket] += 1
+                global_set.add(url_k)
+                per_file[bucket].add(url_k)
+
     if geo:
         from lib import geoip
         geoip.save_cache(geo["path"], geo["cache"])
 
-    if not total:
-        info = ", ".join(f"{f.name}={f.stat().st_size:,}б" for f in files)
-        print(f"Строк не найдено. Прочитано файлов: {len(files)} ({info}). "
-              f"Если размер ~0 — GSA ещё дописывал отчёт (перезапусти --report по файлу) "
-              f"или экспорт был пустой (проверь, что ^a выделил все проекты).")
-        return
-    ordered = counts.most_common()
-    ns = counts.get("not_stated", 0)
-    print(f"Строк: {rows_read:,} | бакетов: {len(counts)} | "
-          f"GeoIP-добор not_stated: {filled:,} | осталось not_stated: {ns:,}")
-    print("── бакеты ──")
-    lines = [f"{b:<14} {n:>7,}" for b, n in ordered]
-    for ln in lines:
-        print("  " + ln)
+    # дописать новые URL в файлы базы (как split1404 — с гарантией \n перед дозаписью)
+    if not dry:
+        for fn in buckets.all_bucket_files():
+            (bdir / fn).touch(exist_ok=True)
+        for bucket_file, urls in to_append.items():
+            if not urls:
+                continue
+            path = bdir / bucket_file
+            with path.open("a", encoding="utf-8", newline="") as f:
+                try:
+                    if path.stat().st_size > 0:
+                        with path.open("rb") as fb:
+                            fb.seek(-1, 2)
+                            if fb.read(1) != b"\n":
+                                f.write("\n")
+                except OSError:
+                    pass
+                f.write("\n".join(urls) + "\n")
+
+    total_added = sum(added.values())
+    post = dict(pre)
+    for fn, n in added.items():
+        post[fn] = post.get(fn, 0) + n
+    total_lines = sum(post.get(fn, 0) for fn, _ in buckets.SUMMARY_ORDER)
+    total_lines += post.get(buckets.NOT_STATED_FILE, 0)
+
+    # сводка формата debug_summary (split1404)
+    head = (f"Всего строк в CSV: {total_rows}\n"
+            f"Строк с непустым URL (без дедупликации): {nonempty}\n"
+            f"Добавлено новых URL (после дедупликации): {total_added}\n"
+            f"Пропущено (уже есть в целевом файле): {skip_target}\n"
+            f"Пропущено (уже существует в другом файле): {skip_global}\n"
+            f"Пропущено (дубликат в текущем запуске): {skip_dup}\n"
+            f"Пропущено (пустой URL): {skip_empty}\n"
+            f"GeoIP-добор Not Stated: {filled}\n")
+    body_lines = [f"{label} {post.get(fn, 0)} {buckets.fmt_added(added.get(fn, 0))}"
+                  for fn, label in buckets.SUMMARY_ORDER]
+    ns_line = (f"Не указано {post.get(buckets.NOT_STATED_FILE, 0)} "
+               f"{buckets.fmt_added(added.get(buckets.NOT_STATED_FILE, 0))}")
+    summary = head + "\n" + "\n".join(body_lines) + f"\n\n{ns_line}\n\nИТОГО {total_lines}\n"
+
+    print(summary + ("\n[dry-run: база не изменена]" if dry else ""))
 
     out_dir = Path(cfg.get("report_out_dir") or (DATA_DIR / "reports"))
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = time.strftime("%Y-%m-%d_%H%M%S")
+    stamp = time.strftime("%Y-%m-%d")
     rep = out_dir / f"gsa_report_{cfg.get('server_name', 'gsa')}_{stamp}.txt"
-    rep.write_text("\n".join(lines) + f"\n\nИТОГО {total:,} | not_stated {ns:,} | "
-                   f"GeoIP-добор {filled:,}\n", encoding="utf-8")
-    print(f"✓ отчёт: {rep}")
+    if not dry:
+        rep.write_text(summary, encoding="utf-8")
+        print(f"✓ отчёт: {rep}")
 
-    top = "\n".join(f"{b}: {n:,}" for b, n in ordered[:15])
-    telegram.send(cfg, f"📊 <b>GSA verified — статистика</b>\nвсего {total:,}, "
-                       f"not_stated {ns:,} (GeoIP добрал {filled:,})\n\n{top}")
+    # Telegram — тот же формат (страна ВСЕГО (+новых) … ИТОГО)
+    label = telegram.server_label(cfg) if hasattr(telegram, "server_label") else \
+        cfg.get("server_name", "gsa")
+    tg = (f"📊 <b>GSA verified — недельная сводка</b> ({label})\n"
+          f"Добавлено новых: <b>{total_added}</b>\n\n"
+          + "\n".join(body_lines) + f"\n\n{ns_line}\n\n<b>ИТОГО {total_lines}</b>")
+    telegram.send(cfg, tg)
 
 
 def cmd_ui_export(cfg: dict, args) -> None:
