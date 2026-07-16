@@ -31,6 +31,8 @@
   "email_domains": [],
   "input_share_dir": "\\\\SERVER1\\share\\for_gsa_ser",
   "export_dir": "\\\\10.10.10.50\\шара\\GSA verified export",
+  "report_input": "\\\\10.10.10.50\\шара\\GSA verified export",
+  "report_out_dir": "\\\\10.10.10.50\\шара\\GSA verified export\\reports",
   "geoip_db": "C:\\A-GSA\\GeoLite2-Country.mmdb",
   "geoip_timeout": 3,
   "import_settle_min": 2,

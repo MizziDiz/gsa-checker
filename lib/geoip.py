@@ -60,6 +60,29 @@ def save_cache(path: Path, cache: dict) -> None:
         pass
 
 
+def country_name_by_ip(ip: str, db_path: str, cache: dict) -> str:
+    """Английское название страны по ГОТОВОМУ IP (без DNS — IP уже есть в CSV GSA).
+    '' — не найдено. Кэшируется по IP."""
+    ip = (ip or "").strip()
+    if not ip:
+        return ""
+    if ip in cache:
+        return cache[ip]
+    reader = _get_reader(db_path)
+    if reader is None:
+        return ""
+    name = ""
+    try:
+        rec = reader.get(ip)
+        if rec:
+            c = rec.get("country") or rec.get("registered_country") or {}
+            name = (c.get("names") or {}).get("en", "") or ""
+    except Exception:
+        name = ""
+    cache[ip] = name
+    return name
+
+
 def country_iso(host: str, db_path: str, cache: dict, timeout: float = 3.0) -> str:
     """ISO-код страны (напр. 'US','PL') для host по GeoIP. '' — не удалось.
     Результат кэшируется в cache (host → код или '')."""
