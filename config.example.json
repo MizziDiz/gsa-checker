@@ -23,6 +23,11 @@
   "ui_toggle_status": true,
   "ui_status_off_seq": "{DOWN}{RIGHT}{DOWN}{ENTER}",
   "ui_status_on_seq": "{DOWN}{RIGHT}{ENTER}",
+  "ui_export_select_seq": "^a",
+  "ui_export_menu_seq": "",
+  "ui_export_trigger_seq": "",
+  "ui_export_dialog_wait": 2.0,
+  "ui_export_settle_sec": 20,
 
   "gsa_template_prj": "C:\\A-GSA\\templates\\template.prj",
   "create_out_dir": "C:\\A-GSA\\created",

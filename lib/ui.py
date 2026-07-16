@@ -146,6 +146,103 @@ def _menu_action(focus_xy, seq, opts, log, label):
     return True
 
 
+def _save_dialog(out_path, pause, wait, log) -> None:
+    """Вписывает путь в диалог «Сохранить как» и подтверждает. Диалог — стандартное
+    общее окно Windows (класс #32770, ОДИНАКОВ на любой локали), поэтому ищем по классу,
+    а не по заголовку («Save as»/«Сохранить как»). Fallback — печать пути в фокус."""
+    import time
+    from pywinauto import keyboard
+    time.sleep(wait)
+    try:
+        from pywinauto import Desktop
+        dlg = Desktop(backend="win32").window(class_name="#32770")
+        dlg.wait("exists ready", timeout=wait + 5)
+        edit = dlg.child_window(class_name="Edit", found_index=0)
+        edit.set_edit_text(str(out_path))
+        time.sleep(0.3)
+        keyboard.send_keys("{ENTER}", pause=pause)
+        log.info(f"ui: путь вписан в диалог сохранения → {out_path}")
+        return
+    except Exception as e:
+        log.info(f"ui: диалог по классу не найден ({type(e).__name__}); печатаю в фокус")
+    # fallback: очистить поле и напечатать путь как есть (пробелы — with_spaces)
+    keyboard.send_keys("^a{BACKSPACE}", pause=pause)
+    keyboard.send_keys(str(out_path), with_spaces=True, pause=0.01)
+    keyboard.send_keys("{ENTER}", pause=pause)
+
+
+def export_verified(cfg, out_path, log) -> bool:
+    """Автоматизирует РУЧНУЮ выгрузку verified-CSV из GSA (тот, где колонки IP/Country):
+      1) выбрать проекты в гриде  — `ui_export_select_seq` (по умолч. `^a` — все);
+      2) меню (`ui_open_menu_key`={VK_APPS}) → Show URLs → Verified — `ui_export_menu_seq`;
+      3) в открывшемся окне списка вызвать экспорт — `ui_export_trigger_seq`;
+      4) в диалоге «Сохранить как» вписать out_path и подтвердить.
+    Всё клавиатурой (меню owner-drawn, UIA слепо). Последовательности в конфиге и
+    ТРЕБУЮТ живой настройки под билд GSA — по --ui-check и точным ручным шагам оператора.
+    Возвращает True, если файл появился на диске."""
+    _require_pywinauto()
+    import time
+    from pywinauto import mouse, keyboard
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(OSError):
+        if out_path.exists():
+            out_path.unlink()          # чтобы проверка «файл появился» была честной
+
+    delay = float(cfg.get("ui_menu_delay", 0.5) or 0.5)
+    pause = float(cfg.get("ui_key_pause", 0.25) or 0.25)
+    wait = float(cfg.get("ui_export_dialog_wait", 2.0) or 2.0)
+    try:
+        app, win = _connect(cfg)
+        win.set_focus()
+        grid = _find_grid(win, cfg)
+        r = grid.rectangle()
+        off = cfg.get("ui_row_offset", [30, 25])
+        focus_xy = (r.left + int(off[0]), r.top + int(off[1]))
+        select_keys = cfg.get("ui_export_select_seq", "^a")        # все проекты
+        open_key = cfg.get("ui_open_menu_key", "{VK_APPS}")
+        menu_seq = cfg.get("ui_export_menu_seq", "")               # → Show URLs → Verified
+        if not menu_seq:
+            log.error("ui: не задан ui_export_menu_seq (путь меню Show URLs → Verified). "
+                      "Настройте по --ui-check и ручным шагам — экспорт не запускаю.")
+            return False
+
+        # 1-2) выбрать проекты и пройти меню до «Show URLs → Verified»
+        mouse.click(coords=focus_xy)
+        time.sleep(0.3)
+        if select_keys:
+            keyboard.send_keys(select_keys, pause=pause)
+            time.sleep(0.3)
+        keyboard.send_keys(open_key, pause=pause)
+        time.sleep(delay)
+        keyboard.send_keys(menu_seq, pause=pause)
+        log.info(f"ui: выбор {select_keys!r} → меню {open_key!r} → {menu_seq!r}")
+        time.sleep(wait)               # ждём окно списка Show URLs
+
+        # 3) вызвать экспорт в окне списка (если у билда есть горячая последовательность)
+        trigger = cfg.get("ui_export_trigger_seq", "")
+        if trigger:
+            keyboard.send_keys(trigger, pause=pause)
+            log.info(f"ui: экспорт в окне списка {trigger!r}")
+
+        # 4) диалог «Сохранить как»
+        _save_dialog(out_path, pause, wait, log)
+
+        # подтверждение: ждём появления файла
+        for _ in range(int(cfg.get("ui_export_settle_sec", 20) or 20)):
+            if out_path.exists() and out_path.stat().st_size > 0:
+                log.info(f"ui: выгрузка готова → {out_path} "
+                         f"({out_path.stat().st_size:,} байт)")
+                return True
+            time.sleep(1)
+        log.error(f"ui: файл не появился: {out_path}. Проверьте ui_export_menu_seq / "
+                  f"ui_export_trigger_seq по --ui-check и ручным шагам.")
+        return False
+    except Exception as e:
+        log.error(f"ui: экспорт не удался: {type(e).__name__}: {e}")
+        return False
+
+
 def refresh(cfg, log) -> bool:
     """Повторяет ручной рефреш GSA КЛАВИАТУРОЙ (меню owner-drawn, UIA его не видит):
       1) ПКМ по строке проекта → `ui_refresh_seq` (по умолч. {UP}{ENTER} = последний
