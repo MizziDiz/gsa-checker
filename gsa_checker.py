@@ -329,6 +329,30 @@ def cmd_report(cfg: dict, args) -> None:
                        f"not_stated {ns:,} (GeoIP добрал {filled:,})\n\n{top}")
 
 
+def cmd_ui_export(cfg: dict, args) -> None:
+    """Выгружает verified-CSV из GSA через UI (--ui-export) в папку report_input, чтобы
+    его сразу подхватил --report. Если задан и --report — сразу считает статистику по
+    свежему файлу (замыкает цикл выгрузка → раскладка по бакетам → Telegram)."""
+    import logging
+    from lib import ui
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    log = logging.getLogger("gsa_checker")
+
+    base = Path(cfg.get("report_input") or cfg.get("report_out_dir") or DATA_DIR)
+    if base.suffix.lower() == ".csv":
+        base = base.parent
+    stamp = time.strftime("%Y-%m-%d_%H%M%S")
+    out = base / f"Verified_{cfg.get('server_name', 'gsa')}_{stamp}.csv"
+
+    ok = ui.export_verified(cfg, out, log)
+    if not ok:
+        sys.exit("UI-выгрузка не удалась (см. лог выше). Настройте ui_export_* по --ui-check.")
+    print(f"✓ verified-CSV выгружен: {out}")
+    if args.report:
+        args.csv = str(out)
+        cmd_report(cfg, args)
+
+
 def cmd_export(cfg: dict, args) -> None:
     """Выгрузка verified-результатов (`.success`) в CSV со страной (по ccTLD) на шару.
     Инкрементально: по офсету в state читает только новые строки с прошлого прогона.
@@ -1089,6 +1113,8 @@ def main() -> None:
                     help="диагностика окна GSA (pywinauto) → data/ui_controls.txt")
     ap.add_argument("--ui-refresh", action="store_true",
                     help="толкнуть GSA подхватить новые цели (pywinauto)")
+    ap.add_argument("--ui-export", action="store_true",
+                    help="выгрузить verified-CSV из GSA через UI (потом можно --report)")
     ap.add_argument("--emails", action="store_true",
                     help="обновить [email accounts] в .prj свежими почтами")
     ap.add_argument("--count", type=int, default=0,
@@ -1135,6 +1161,9 @@ def main() -> None:
         logging.basicConfig(level=logging.INFO, format="%(message)s")
         from lib import ui
         ui.refresh(cfg, logging.getLogger("gsa_checker"))
+        return
+    if args.ui_export:
+        cmd_ui_export(cfg, args)
         return
     if args.emails:
         cmd_emails(cfg, args)
