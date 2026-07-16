@@ -512,8 +512,39 @@ def print_stats(data: dict) -> None:
     print(tail)
 
 
+_URL_RE = re.compile(r"^https?://\S", re.I)
+
+
+def _is_url(s: str) -> bool:
+    """Цель валидна, только если это URL (http/https), а не обычная строка/ключи."""
+    return bool(_URL_RE.match(s))
+
+
+def _collect_urls(path: Path, seen: set, limit: int = 0):
+    """URL-строки из файла (только http(s)://), дедуп через seen. Возвращает
+    (urls, total, valid): total — непустых строк, valid — из них URL."""
+    total = valid = 0
+    urls: list[str] = []
+    with path.open(encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            u = line.strip()
+            if not u:
+                continue
+            total += 1
+            if not _is_url(u):
+                continue
+            valid += 1
+            if u not in seen:
+                seen.add(u)
+                urls.append(u)
+                if limit and len(urls) >= limit:
+                    break
+    return urls, total, valid
+
+
 def _read_targets(src: Path, limit: int) -> list[str]:
-    """Список целевых URL из файла или папки (*.txt), дедуп с сохранением порядка."""
+    """Цели из файла или папки (*.txt): только URL (http/https), дедуп. Не-URL строки
+    пропускаются; файлы без единого URL — предупреждение (вероятно, не тот файл)."""
     files = []
     if src.is_dir():
         files = sorted(p for p in src.rglob("*.txt") if p.is_file())
@@ -521,15 +552,21 @@ def _read_targets(src: Path, limit: int) -> list[str]:
         files = [src]
     seen: set[str] = set()
     out: list[str] = []
+    skipped, bad_files = 0, []
     for f in files:
-        with f.open(encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                u = line.strip()
-                if u and u not in seen:
-                    seen.add(u)
-                    out.append(u)
-                    if limit and len(out) >= limit:
-                        return out
+        rem = (limit - len(out)) if limit else 0
+        if limit and rem <= 0:
+            break
+        urls, total, valid = _collect_urls(f, seen, rem)
+        skipped += (total - valid)
+        if total > 0 and valid == 0:
+            bad_files.append(f.name)
+        out.extend(urls)
+    if skipped:
+        print(f"⚠ пропущено не-URL строк: {skipped:,}", file=sys.stderr)
+    if bad_files:
+        print(f"⚠ без единого URL (не список ссылок?): {', '.join(bad_files[:5])}"
+              + (" …" if len(bad_files) > 5 else ""), file=sys.stderr)
     return out
 
 
@@ -663,13 +700,17 @@ def _email_reminder(cfg: dict, telegram) -> None:
 def _distribute(cfg, projects_dir, eligible, selected, ext, apply, total_bytes, telegram) -> None:
     """Собирает цели из выбранных батчей (дедуп) и раздаёт ПОРОВНУ по проектам."""
     seen, targets = set(), []
+    skipped, bad = 0, []
     for f in selected:
-        with f.open(encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                u = line.strip()
-                if u and u not in seen:
-                    seen.add(u)
-                    targets.append(u)
+        urls, total, valid = _collect_urls(f, seen)
+        skipped += (total - valid)
+        if total > 0 and valid == 0:
+            bad.append(f.name)
+        targets.extend(urls)
+    if skipped:
+        print(f"⚠ пропущено не-URL строк: {skipped:,}", file=sys.stderr)
+    if bad:
+        print(f"⚠ батчи без URL (пропущены как цели): {', '.join(bad[:5])}", file=sys.stderr)
     n = len(eligible)
     names = ", ".join(f.name for f in selected[:5]) + (" …" if len(selected) > 5 else "")
     print(f"Батчи ({len(selected)}, ~{total_bytes/1048576:.0f} МБ): {names}")
