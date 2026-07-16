@@ -103,12 +103,15 @@ python gsa_checker.py --report --csv "\\share\...\Verified.csv"
 python gsa_checker.py --report        # CSV из report_input
 ```
 ### 4d. Автовыгрузка verified-CSV из GSA (`--ui-export`)  ⏳ КАРКАС, нужна обкатка
-Автоматизирует ручной шаг выгрузки (фича C): `ui.export_verified` клавиатурой — выбрать
-проекты (`ui_export_select_seq=^a`) → меню `{VK_APPS}` → Show URLs → Verified
-(`ui_export_menu_seq`) → экспорт в окне списка (`ui_export_trigger_seq`) → диалог
-«Сохранить как» (ищется по классу `#32770`, локале-независимо). Пишет в `report_input`;
-`--ui-export --report` сразу считает статистику. **`ui_export_menu_seq` пуст по умолчанию
-→ без настройки не запускается.** Нужны точные ручные шаги оператора + обкатка на Windows.
+Автоматизирует ручной шаг выгрузки (фича C). Ручной путь (подтверждён оператором,
+v18.98): выделить все проекты → ПКМ → **Modify Project → Export → Create Report** → галка
+«Verified URLs (CSV Format)» → OK → «Сохранить как» (один общий CSV, колонка Project).
+`ui.export_verified` клавишами: `^a` → `{VK_APPS}` → `ui_export_menu_seq`
+(`{UP}{UP}{RIGHT}` Modify Project → `{DOWN}×4{RIGHT}` Export → `{UP}{ENTER}` Create Report)
+→ `ui_export_trigger_seq` (`{ENTER}` OK) → диалог сохранения (класс `#32770`). Пишет в
+`report_input`; `--ui-export --report` замыкает цикл в Telegram. **Счётное место —
+`{DOWN}×4` до Export (серые пункты?); рядом Delete/Reset Data → первый прогон глазами,
+при промахе править число {DOWN}.** Обкатка только на Windows-сервере.
 
 ### 5. Telegram-уведомления + heartbeat  ✅ ГОТОВО (базовое)
 `lib/telegram.py` (порт из Aparser-checker: прямая отправка / прокси / релей).
