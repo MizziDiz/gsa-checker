@@ -181,16 +181,15 @@ def export_verified(cfg, out_path, log) -> bool:
       1) `ui_export_select_seq` (по умолч. `^a` — выделить все проекты);
       2) `ui_open_menu_key` ({VK_APPS}) + `ui_export_menu_seq` — пройти до Create Report:
          `{UP}{UP}{RIGHT}` = Modify Project (предпоследний пункт) → его подменю; далее
-         `{DOWN}{DOWN}{DOWN}{DOWN}{RIGHT}` = дойти до Export и открыть его подменю; затем
-         `{UP}{ENTER}` = Create Report (последний из трёх, берём wrap'ом вверх);
+         `{DOWN}×6{RIGHT}` = дойти до Export и открыть его подменю (клавиатура GSA НЕ
+         пропускает серые пункты — 2 серых в счёте: Edit Only Engines/Options, Edit single
+         Option for All); затем `{UP}{ENTER}` = Create Report (последний из трёх, wrap);
       3) `ui_export_trigger_seq` ({ENTER}) — OK в «Select Reports» (галка CSV запоминается
          GSA между запусками);
       4) диалог «Сохранить как» — вписать out_path (см. _save_dialog).
-    ⚠ Счётное место — 4×{DOWN} до Export в подменю Modify Project (зависит от того,
-    пропускает ли клавиатура серые пункты). Рядом деструктивные пункты (Delete/Reset
-    Data), поэтому ПЕРВЫЙ прогон делать ГЛАЗАМИ: если подсветка не на Export — поправить
-    число {DOWN} в `ui_export_menu_seq` и не давать завершиться. Возвращает True, если
-    файл появился на диске."""
+    Рядом с Export деструктивные пункты (Delete/Reset Data), поэтому первый прогон на новом
+    билде — глазами; при промахе править число {DOWN} в `ui_export_menu_seq`. Возвращает
+    True, если файл появился на диске."""
     _require_pywinauto()
     import time
     from pywinauto import mouse, keyboard
