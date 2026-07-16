@@ -24,7 +24,7 @@
   "ui_status_off_seq": "{DOWN}{RIGHT}{DOWN}{ENTER}",
   "ui_status_on_seq": "{DOWN}{RIGHT}{ENTER}",
   "ui_export_select_seq": "^a",
-  "ui_export_menu_seq": "{UP}{UP}{RIGHT}{DOWN}{DOWN}{DOWN}{DOWN}{RIGHT}{UP}{ENTER}",
+  "ui_export_menu_seq": "{UP}{UP}{RIGHT}{DOWN}{DOWN}{DOWN}{DOWN}{DOWN}{DOWN}{RIGHT}{UP}{ENTER}",
   "ui_export_trigger_seq": "{ENTER}",
   "ui_export_dialog_wait": 2.0,
   "ui_export_settle_sec": 20,

@@ -107,11 +107,11 @@ python gsa_checker.py --report        # CSV из report_input
 v18.98): выделить все проекты → ПКМ → **Modify Project → Export → Create Report** → галка
 «Verified URLs (CSV Format)» → OK → «Сохранить как» (один общий CSV, колонка Project).
 `ui.export_verified` клавишами: `^a` → `{VK_APPS}` → `ui_export_menu_seq`
-(`{UP}{UP}{RIGHT}` Modify Project → `{DOWN}×4{RIGHT}` Export → `{UP}{ENTER}` Create Report)
-→ `ui_export_trigger_seq` (`{ENTER}` OK) → диалог сохранения (класс `#32770`). Пишет в
-`report_input`; `--ui-export --report` замыкает цикл в Telegram. **Счётное место —
-`{DOWN}×4` до Export (серые пункты?); рядом Delete/Reset Data → первый прогон глазами,
-при промахе править число {DOWN}.** Обкатка только на Windows-сервере.
+(`{UP}{UP}{RIGHT}` Modify Project → `{DOWN}×6{RIGHT}` Export → `{UP}{ENTER}` Create Report;
+v18.98 не пропускает 2 серых пункта → 6) → `ui_export_trigger_seq` (`{ENTER}` OK) → диалог
+сохранения (класс `#32770`). Пишет в `report_input`; `--ui-export --report` замыкает цикл
+в Telegram. Рядом с Export деструктивные Delete/Reset Data → первый прогон на новом билде
+глазами. Обкатка только на Windows-сервере.
 
 ### 5. Telegram-уведомления + heartbeat  ✅ ГОТОВО (базовое)
 `lib/telegram.py` (порт из Aparser-checker: прямая отправка / прокси / релей).
