@@ -172,14 +172,25 @@ def _save_dialog(out_path, pause, wait, log) -> None:
 
 
 def export_verified(cfg, out_path, log) -> bool:
-    """Автоматизирует РУЧНУЮ выгрузку verified-CSV из GSA (тот, где колонки IP/Country):
-      1) выбрать проекты в гриде  — `ui_export_select_seq` (по умолч. `^a` — все);
-      2) меню (`ui_open_menu_key`={VK_APPS}) → Show URLs → Verified — `ui_export_menu_seq`;
-      3) в открывшемся окне списка вызвать экспорт — `ui_export_trigger_seq`;
-      4) в диалоге «Сохранить как» вписать out_path и подтвердить.
-    Всё клавиатурой (меню owner-drawn, UIA слепо). Последовательности в конфиге и
-    ТРЕБУЮТ живой настройки под билд GSA — по --ui-check и точным ручным шагам оператора.
-    Возвращает True, если файл появился на диске."""
+    """Автоматизирует РУЧНУЮ выгрузку verified-CSV из GSA (тот, где колонки IP/Country).
+    Ручной путь оператора (GSA v18.98): выделить все проекты → ПКМ → Modify Project →
+    Export → Create Report → в окне «Select Reports» галка «Verified URLs (CSV Format)» →
+    OK → «Сохранить как». Один общий CSV на все выбранные проекты (колонка Project).
+
+    Клавишами (меню owner-drawn, UIA слепо):
+      1) `ui_export_select_seq` (по умолч. `^a` — выделить все проекты);
+      2) `ui_open_menu_key` ({VK_APPS}) + `ui_export_menu_seq` — пройти до Create Report:
+         `{UP}{UP}{RIGHT}` = Modify Project (предпоследний пункт) → его подменю; далее
+         `{DOWN}{DOWN}{DOWN}{DOWN}{RIGHT}` = дойти до Export и открыть его подменю; затем
+         `{UP}{ENTER}` = Create Report (последний из трёх, берём wrap'ом вверх);
+      3) `ui_export_trigger_seq` ({ENTER}) — OK в «Select Reports» (галка CSV запоминается
+         GSA между запусками);
+      4) диалог «Сохранить как» — вписать out_path (см. _save_dialog).
+    ⚠ Счётное место — 4×{DOWN} до Export в подменю Modify Project (зависит от того,
+    пропускает ли клавиатура серые пункты). Рядом деструктивные пункты (Delete/Reset
+    Data), поэтому ПЕРВЫЙ прогон делать ГЛАЗАМИ: если подсветка не на Export — поправить
+    число {DOWN} в `ui_export_menu_seq` и не давать завершиться. Возвращает True, если
+    файл появился на диске."""
     _require_pywinauto()
     import time
     from pywinauto import mouse, keyboard

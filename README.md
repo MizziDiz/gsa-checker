@@ -159,21 +159,23 @@ python gsa_checker.py --export --full      # весь .success, а не толь
 
 ### Автовыгрузка verified-CSV из GSA (`--ui-export`)
 Автоматизирует **ручной** шаг «выгрузить verified в CSV» через UI (`lib/ui.py`,
-pywinauto, только Windows). Повторяет клавиатурой: выбрать проекты
-(`ui_export_select_seq`, по умолч. `^a` — все) → меню (`{VK_APPS}`) → **Show URLs →
-Verified** (`ui_export_menu_seq`) → вызвать экспорт в окне списка
-(`ui_export_trigger_seq`) → в диалоге «Сохранить как» вписать путь и подтвердить. Файл
-пишется в папку `report_input` под именем `Verified_<server>_<дата>.csv`, чтобы его сразу
-подхватил `--report`.
+pywinauto, только Windows). Повторяет ручной путь оператора (GSA v18.98): выделить все
+проекты → ПКМ → **Modify Project → Export → Create Report** → галка «Verified URLs (CSV
+Format)» → OK → «Сохранить как». Один общий CSV на все проекты (колонка `Project`).
+Клавишами: `ui_export_select_seq` (`^a`) → меню `{VK_APPS}` + `ui_export_menu_seq`
+(`{UP}{UP}{RIGHT}` = Modify Project → `{DOWN}×4{RIGHT}` = Export → `{UP}{ENTER}` = Create
+Report) → `ui_export_trigger_seq` (`{ENTER}` = OK, галку CSV GSA помнит) → диалог
+сохранения (ищется по классу окна `#32770`, локале-независимо). Файл пишется в
+`report_input` как `Verified_<server>_<дата>.csv` — чтобы сразу подхватил `--report`.
 ```
 python gsa_checker.py --ui-export            # только выгрузить CSV
 python gsa_checker.py --ui-export --report    # выгрузить И сразу посчитать статистику
 ```
-> ⚠ Меню GSA owner-drawn (UIA слепо) → навигация клавишами, а последовательности зависят
-> от билда. **`ui_export_menu_seq` пуст по умолчанию — без него команда не запускается**
-> (чтобы не тыкать вслепую). Настраивается по `--ui-check` и точным ручным шагам: сколько
-> раз `{DOWN}`/`{RIGHT}` до «Show URLs», затем до «Verified». Диалог сохранения ищется по
-> классу окна `#32770` (не зависит от локали Windows). Обкатка — на живом сервере.
+> ⚠ **Первый прогон — только глядя на экран.** Единственное «счётное» место —
+> `{DOWN}×4` до «Export» в подменю Modify Project: зависит от того, пропускает ли
+> клавиатура серые пункты. Рядом деструктивные пункты (Delete / Reset Data) — если
+> подсветка встала не на «Export», поправь число `{DOWN}` в `ui_export_menu_seq` и не
+> давай последовательности завершиться. После сверки — ставь в планировщик.
 
 ### Статистика по странам для добора (`--report`)
 Читает **verified-CSV, выгруженный из GSA** (в нём уже есть колонки `Country` — GSA
