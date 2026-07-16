@@ -177,44 +177,46 @@ python gsa_checker.py --ui-export --report    # выгрузить И сразу
 > пропускаются). Рядом деструктивные пункты (Delete / Reset Data) — если подсветка встала
 > не на «Export», поправь число `{DOWN}` в `ui_export_menu_seq`. После сверки — в планировщик.
 
-### Недельная статистика по странам (`--report`) — замена ручного split1404
-Делает ровно то, что твой `Split/split1404.py`, но источник — **verified-CSV из GSA**
-(колонки `Country` по IP-геолокации GSA, `URL`, `IP`). Раскладывает ссылки по страновым
-бакетам (логика `split1404` 1:1 — `lib/buckets.py`: `COUNTRY_FILES`+`REGION_FILES`+
-`SUMMARY_ORDER`), **инкрементно дописывает только новые URL в базу `out_country_buckets`**
-(`buckets_dir`) с дедупом (per-file + global + внутри прогона) и формирует сводку **того
-же формата, что `debug_summary.txt`** — `🏳 Страна ВСЕГО (+новых) … Не указано … ИТОГО` —
-пишет её в `report_out_dir` и **шлёт в Telegram**. Проверено: вывод байт-в-байт совпадает
-с `split1404` на реальной базе (501 новых из 16 112), второй прогон того же CSV = `+0`.
+### Недельная статистика по странам (`--report`) — замена split1404, БЕЗ UI
+Делает ровно то, что твой `Split/split1404.py`, но **источник по умолчанию — файлы
+`.success` проектов на диске** (GSA не трогаем вообще, никаких кликов). Ключевой факт: GSA
+**сам** записывает в `.success` готовый **код страны** (предпоследнее поле, ISO2) и **IP**
+(последнее поле) — по ccTLD домена, а для gTLD (`.com/.net`) по IP. Проверено на 1.csv:
+ccTLD ↔ страна GSA = **100%** (313/313), а прямой GeoIP-по-IP давал лишь 45% (IP — это
+хостинг). Поэтому берём страну прямо из `.success` = страна GSA 1:1, без UI и без догадок.
 
-Строки, где GSA не определил страну (бакет `Not Stated`), **добираются по IP локально**
-через GeoIP (`geoip_db`, MaxMind/DB-IP `.mmdb`) — **без DNS**, IP уже в CSV, лимитов нет.
+`--report`: читает `.success` (`verified_glob` из `gsa_projects_dir`), код ISO2 → страна
+(`lib/iso2.py`), раскладка по бакетам логикой `split1404` 1:1 (`lib/buckets.py`:
+`COUNTRY_FILES`/`REGION_FILES`/`SUMMARY_ORDER`), **инкрементно дописывает только новые URL
+в базу `out_country_buckets`** (`buckets_dir`, дедуп per-file+global+in-run), формирует
+сводку формата `debug_summary.txt` (`🏳 Страна ВСЕГО (+новых) … Не указано … ИТОГО`) в
+`report_out_dir` и **шлёт в Telegram**. Оставшиеся пустые коды (`Not Stated`) добираются
+по IP через GeoIP (`geoip_db`). Проверено: вывод формата 1:1 со `split1404`, инкремент
+идемпотентен (+64, повтор +0).
 ```
-python gsa_checker.py --report --csv "\\share\GSA verified export\Verified.csv"
-python gsa_checker.py --report --dry-run     # посчитать и показать, НЕ трогая базу
-python gsa_checker.py --report                # CSV из report_input (файл или папка *.csv)
+python gsa_checker.py --report               # из .success (штатно, без UI)
+python gsa_checker.py --report --dry-run      # посчитать и показать, НЕ трогая базу
+python gsa_checker.py --report --csv "\\share\...\Verified.csv"   # источник — GSA-CSV
 ```
 > Дальше ты по сводке решаешь, сколько добрать из какого бакета — сам добор целей делает
 > твой `select_links_by_targets`. gsa-checker ведёт `out_country_buckets` вместо ручного
-> запуска `split1404` (не запускай их одновременно на одной базе). Разделитель CSV
-> определяется автоматически (`,`/`;`/таб), BOM ок.
+> `split1404` (не запускай оба на одной базе одновременно).
 
-### Сверка стран GSA vs наш GeoIP (`--geocheck`)
-Разовая проверка перед доверием автоматизации: берёт одну GSA-выгрузку (в ней есть и
-`Country` от GSA, и `IP`) и сравнивает **страну GSA против нашего GeoIP по тому же IP** —
-% совпадения бакетов, сколько «Not Stated» добирает GeoIP, топ расхождений. Базу не
-трогает (read-only). Нужен `geoip_db` (.mmdb) на этой машине.
-```
-python gsa_checker.py --geocheck --csv "\\share\...\Verified.csv"
-```
-
-### Полный недельный цикл: выгрузка → статистика (по понедельникам)
-`--ui-export --report` в одной команде: GSA выгружает свежий verified-CSV и сразу считается
-недельная сводка с добавкой в базу. Ставить в планировщик Windows раз в неделю (пн):
+### Недельный автозапуск (по понедельникам)
+Штатный путь — **без UI**, одной командой в планировщике Windows (следующий пн — 2026-07-20):
 ```
 schtasks /Create /SC WEEKLY /D MON /ST 09:00 /TN "gsa-weekly-report" ^
-  /TR "python C:\A-GSA\gsa_checker.py --ui-export --report"
+  /TR "python C:\A-GSA\gsa_checker.py --report"
 ```
+
+### (Опционально) UI-выгрузка и сверка — `--ui-export` / `--geocheck`
+Больше не нужны для штатной работы (`.success` самодостаточен), но остаются как
+инструменты:
+- **`--ui-export`** — если понадобится именно родной CSV-отчёт GSA (через UI, Modify
+  Project → Export → Create Report). Хрупко (клики по меню), см. блок ниже про `{DOWN}×6`.
+- **`--geocheck --csv <файл>`** — разовая сверка страны GSA против нашего GeoIP по IP на
+  одной GSA-выгрузке (read-only). Именно ей выяснили, что GSA считает страну по ccTLD, а
+  не по IP.
 
 ### Уведомления в Telegram (`--notify`)
 `lib/telegram.py` (прямая отправка, `telegram_proxy` или сервер-релей `telegram_relay_url`).

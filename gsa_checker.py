@@ -323,24 +323,86 @@ def cmd_geocheck(cfg: dict, args) -> None:
             print(f"  {pair}: {n:,}")
 
 
-def cmd_report(cfg: dict, args) -> None:
-    """Статистика по verified из GSA-CSV — ЗАМЕНА ручного split1404. Раскладывает
-    verified-ссылки по странам-бакетам (логика split1404 1:1), инкрементно дописывает
-    новые URL в базу out_country_buckets (`buckets_dir`, дедуп per-file/global/in-run),
-    добивает «Not Stated» по IP через GeoIP, формирует сводку формата debug_summary
-    (страна ВСЕГО (+новых) … ИТОГО), пишет её в report_out_dir и шлёт в Telegram.
-    CSV — из --csv (файл/папка) или report_input."""
+def _iter_verified(cfg: dict, args):
+    """Генератор строк verified: (url, имя_страны, ip). Два источника:
+      • по умолчанию — файлы `.success` проектов (диск, БЕЗ UI): страна = код ISO2 из
+        предпоследнего поля (её проставил сам GSA: ccTLD, а для gTLD — по IP), IP — в
+        последнем поле; поля разделены байтом 0xFF;
+      • если задан --csv — GSA verified CSV (колонки URL/Country/IP)."""
     import csv
+    from lib import iso2
+    if args.csv:
+        src = Path(args.csv)
+        if not src.exists():
+            sys.exit(f"CSV не найдена: {src}")
+        files = sorted(src.rglob("*.csv")) if src.is_dir() else [src]
+        if not files:
+            sys.exit(f"В {src} нет *.csv")
+        print(f"Источник: GSA verified CSV — {len(files)} файл(ов)")
+        for f in files:
+            with f.open(encoding="utf-8-sig", newline="") as fh:
+                sample = fh.read(8192)
+                fh.seek(0)
+                try:
+                    delim = csv.Sniffer().sniff(sample, delimiters=",;\t").delimiter
+                except csv.Error:
+                    delim = ","
+                reader = csv.reader(fh, delimiter=delim)
+                header = next(reader, None)
+                if not header:
+                    print(f"⚠ {f.name}: пустой файл — пропуск", file=sys.stderr)
+                    continue
+                ic = _find_col(header, "Country")
+                iu = _find_col(header, "URL")
+                ip = _find_col(header, "IP")
+                if ic < 0 or iu < 0:
+                    print(f"⚠ {f.name}: нет колонок Country/URL. Шапка: {header}",
+                          file=sys.stderr)
+                    continue
+                for row in reader:
+                    if len(row) <= max(ic, iu):
+                        continue
+                    ipv = row[ip] if 0 <= ip < len(row) else ""
+                    yield row[iu], row[ic], ipv
+        return
+
+    # источник по умолчанию — .success с диска
+    proj = Path(cfg.get("gsa_projects_dir", ""))
+    if not proj.is_dir():
+        sys.exit(f"Папка проектов не найдена: {proj} (gsa_projects_dir в конфиге)")
+    globs = cfg.get("verified_glob", ["*.success"])
+    files = sorted({p for g in globs for p in proj.glob(g)})
+    if not files:
+        sys.exit(f"В {proj} нет verified-файлов ({globs}). Проверь gsa_projects_dir/"
+                 f"verified_glob (--check покажет реальные расширения).")
+    print(f"Источник: .success с диска — {len(files)} проект(ов)")
+    for f in files:
+        try:
+            data = f.read_bytes()
+        except OSError as e:
+            print(f"⚠ {f.name}: {e}", file=sys.stderr)
+            continue
+        for line in data.split(b"\n"):
+            if not line.strip():
+                continue
+            fl = line.split(b"\xff")
+            if len(fl) < 3:
+                continue
+            url = fl[0].decode("utf-8", "replace").strip()
+            code = fl[-2].decode("utf-8", "replace").strip()
+            ipv = fl[-1].decode("utf-8", "replace").strip()
+            yield url, iso2.name_for(code), ipv
+
+
+def cmd_report(cfg: dict, args) -> None:
+    """Недельная статистика verified — ЗАМЕНА ручного split1404, БЕЗ UI. Источник по
+    умолчанию — файлы `.success` проектов (страна = код GSA на диске); либо GSA-CSV через
+    --csv. Раскладывает по странам-бакетам (логика split1404 1:1), инкрементно дописывает
+    новые URL в базу out_country_buckets (`buckets_dir`, дедуп per-file/global/in-run),
+    добивает оставшиеся «Not Stated» по IP через GeoIP, формирует сводку формата
+    debug_summary (страна ВСЕГО (+новых) … ИТОГО), пишет в report_out_dir и шлёт в Telegram."""
     from collections import defaultdict
     from lib import buckets, telegram
-
-    src = Path(args.csv or cfg.get("report_input", ""))
-    if not src.exists():
-        sys.exit(f"CSV/папка не найдена: {src} (--csv ПУТЬ или report_input в конфиге)")
-    files = sorted(src.rglob("*.csv")) if src.is_dir() else [src]
-    if not files:
-        print(f"CSV не найдено в {src} (нет *.csv).")
-        return
 
     bdir = Path(cfg.get("buckets_dir") or (DATA_DIR / "out_country_buckets"))
     bdir.mkdir(parents=True, exist_ok=True)
@@ -351,7 +413,7 @@ def cmd_report(cfg: dict, args) -> None:
     pre = {fn: buckets.count_nonempty_lines(bdir / fn) for fn, _ in buckets.SUMMARY_ORDER}
     pre[buckets.NOT_STATED_FILE] = buckets.count_nonempty_lines(bdir / buckets.NOT_STATED_FILE)
 
-    # GeoIP по IP (без DNS) для «Not Stated» — опционально
+    # GeoIP по IP для оставшихся «Not Stated» — опционально
     geo = None
     geo_db = cfg.get("geoip_db", "")
     if geo_db:
@@ -366,59 +428,36 @@ def cmd_report(cfg: dict, args) -> None:
     total_rows = nonempty = filled = 0
     skip_target = skip_global = skip_dup = skip_empty = 0
 
-    for f in files:
-        size = f.stat().st_size
-        with f.open(encoding="utf-8-sig", newline="") as fh:
-            sample = fh.read(8192)
-            fh.seek(0)
-            try:
-                delim = csv.Sniffer().sniff(sample, delimiters=",;\t").delimiter
-            except csv.Error:
-                delim = ","
-            reader = csv.reader(fh, delimiter=delim)
-            header = next(reader, None)
-            if not header:
-                print(f"⚠ {f.name}: пустой файл ({size:,} байт) — пропуск", file=sys.stderr)
-                continue
-            ic = _find_col(header, "Country")
-            iu = _find_col(header, "URL")
-            ip = _find_col(header, "IP")
-            if ic < 0 or iu < 0:
-                print(f"⚠ {f.name} ({size:,} байт, разделитель {delim!r}): нет колонок "
-                      f"Country/URL. Шапка: {header}", file=sys.stderr)
-                continue
-            for row in reader:
-                if len(row) <= max(ic, iu):
-                    continue
-                total_rows += 1
-                url_raw = buckets.norm(row[iu])
-                if not url_raw:
-                    skip_empty += 1
-                    continue
-                nonempty += 1
-                bucket = buckets.bucket_for_country(buckets.resolve_country(row[ic]))
-                if bucket == buckets.NOT_STATED_FILE and geo and ip >= 0 and len(row) > ip:
-                    from lib import geoip
-                    name = geoip.country_name_by_ip(row[ip], geo["db"], geo["cache"])
-                    if name:
-                        nb = buckets.bucket_for_country(buckets.resolve_country(name))
-                        if nb != buckets.NOT_STATED_FILE:
-                            bucket, filled = nb, filled + 1
-                url_k = buckets.norm_url(url_raw)
-                if url_k in per_file.get(bucket, set()):
-                    skip_target += 1
-                    continue
-                if url_k in global_set:
-                    skip_global += 1
-                    continue
-                if url_k in planned[bucket]:
-                    skip_dup += 1
-                    continue
-                to_append[bucket].append(url_raw)
-                planned[bucket].add(url_k)
-                added[bucket] += 1
-                global_set.add(url_k)
-                per_file[bucket].add(url_k)
+    for url_raw0, country_name, ip_str in _iter_verified(cfg, args):
+        total_rows += 1
+        url_raw = buckets.norm(url_raw0)
+        if not url_raw:
+            skip_empty += 1
+            continue
+        nonempty += 1
+        bucket = buckets.bucket_for_country(buckets.resolve_country(country_name))
+        if bucket == buckets.NOT_STATED_FILE and geo and ip_str:
+            from lib import geoip
+            name = geoip.country_name_by_ip(ip_str, geo["db"], geo["cache"])
+            if name:
+                nb = buckets.bucket_for_country(buckets.resolve_country(name))
+                if nb != buckets.NOT_STATED_FILE:
+                    bucket, filled = nb, filled + 1
+        url_k = buckets.norm_url(url_raw)
+        if url_k in per_file.get(bucket, set()):
+            skip_target += 1
+            continue
+        if url_k in global_set:
+            skip_global += 1
+            continue
+        if url_k in planned[bucket]:
+            skip_dup += 1
+            continue
+        to_append[bucket].append(url_raw)
+        planned[bucket].add(url_k)
+        added[bucket] += 1
+        global_set.add(url_k)
+        per_file[bucket].add(url_k)
 
     if geo:
         from lib import geoip
@@ -451,7 +490,7 @@ def cmd_report(cfg: dict, args) -> None:
     total_lines += post.get(buckets.NOT_STATED_FILE, 0)
 
     # сводка формата debug_summary (split1404)
-    head = (f"Всего строк в CSV: {total_rows}\n"
+    head = (f"Всего строк verified: {total_rows}\n"
             f"Строк с непустым URL (без дедупликации): {nonempty}\n"
             f"Добавлено новых URL (после дедупликации): {total_added}\n"
             f"Пропущено (уже есть в целевом файле): {skip_target}\n"
