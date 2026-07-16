@@ -177,23 +177,35 @@ python gsa_checker.py --ui-export --report    # выгрузить И сразу
 > пропускаются). Рядом деструктивные пункты (Delete / Reset Data) — если подсветка встала
 > не на «Export», поправь число `{DOWN}` в `ui_export_menu_seq`. После сверки — в планировщик.
 
-### Статистика по странам для добора (`--report`)
-Читает **verified-CSV, выгруженный из GSA** (в нём уже есть колонки `Country` — GSA
-ставит её по IP-геолокации — и `IP`), раскладывает ссылки по **страновым бакетам ровно
-той же логикой, что твой `Split/select-v1.py`** (`lib/buckets.py` — `COUNTRY_BUCKETS` +
-`REGION_RULES`, 1:1), считает по каждому бакету и **шлёт сводку в Telegram**. Дальше ты
-решаешь, сколько добрать из какого бакета — сам добор делает твой `select_links_by_targets`.
+### Недельная статистика по странам (`--report`) — замена ручного split1404
+Делает ровно то, что твой `Split/split1404.py`, но источник — **verified-CSV из GSA**
+(колонки `Country` по IP-геолокации GSA, `URL`, `IP`). Раскладывает ссылки по страновым
+бакетам (логика `split1404` 1:1 — `lib/buckets.py`: `COUNTRY_FILES`+`REGION_FILES`+
+`SUMMARY_ORDER`), **инкрементно дописывает только новые URL в базу `out_country_buckets`**
+(`buckets_dir`) с дедупом (per-file + global + внутри прогона) и формирует сводку **того
+же формата, что `debug_summary.txt`** — `🏳 Страна ВСЕГО (+новых) … Не указано … ИТОГО` —
+пишет её в `report_out_dir` и **шлёт в Telegram**. Проверено: вывод байт-в-байт совпадает
+с `split1404` на реальной базе (501 новых из 16 112), второй прогон того же CSV = `+0`.
 
-Строки, у которых GSA не определил страну (бакет `not_stated`), **добираются по IP
-локально** через GeoIP (`geoip_db`, MaxMind/DB-IP `.mmdb`) — **без DNS**, IP уже в CSV,
-поэтому лимитов нет и работает мгновенно (~пара сотен gTLD в неделю).
+Строки, где GSA не определил страну (бакет `Not Stated`), **добираются по IP локально**
+через GeoIP (`geoip_db`, MaxMind/DB-IP `.mmdb`) — **без DNS**, IP уже в CSV, лимитов нет.
 ```
 python gsa_checker.py --report --csv "\\share\GSA verified export\Verified.csv"
-python gsa_checker.py --report            # берёт CSV из report_input (файл или папку с *.csv)
+python gsa_checker.py --report --dry-run     # посчитать и показать, НЕ трогая базу
+python gsa_checker.py --report                # CSV из report_input (файл или папка *.csv)
 ```
-Пишет отчёт `gsa_report_<server>_<дата>.txt` в `report_out_dir` и шлёт top-15 бакетов +
-итог/`not_stated`/сколько добрал GeoIP в Telegram. CSV читается в `utf-8-sig` (BOM ок),
-колонки ищутся по имени (`Country`/`IP`) без учёта регистра и BOM.
+> Дальше ты по сводке решаешь, сколько добрать из какого бакета — сам добор целей делает
+> твой `select_links_by_targets`. gsa-checker ведёт `out_country_buckets` вместо ручного
+> запуска `split1404` (не запускай их одновременно на одной базе). Разделитель CSV
+> определяется автоматически (`,`/`;`/таб), BOM ок.
+
+### Полный недельный цикл: выгрузка → статистика (по понедельникам)
+`--ui-export --report` в одной команде: GSA выгружает свежий verified-CSV и сразу считается
+недельная сводка с добавкой в базу. Ставить в планировщик Windows раз в неделю (пн):
+```
+schtasks /Create /SC WEEKLY /D MON /ST 09:00 /TN "gsa-weekly-report" ^
+  /TR "python C:\A-GSA\gsa_checker.py --ui-export --report"
+```
 
 ### Уведомления в Telegram (`--notify`)
 `lib/telegram.py` (прямая отправка, `telegram_proxy` или сервер-релей `telegram_relay_url`).
