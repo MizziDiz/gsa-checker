@@ -251,6 +251,78 @@ def _find_col(header: list, name: str) -> int:
     return clean.index(name) if name in clean else -1
 
 
+def cmd_geocheck(cfg: dict, args) -> None:
+    """Сверка стран: колонка Country из GSA-выгрузки ПРОТИВ нашего GeoIP по тому же IP.
+    Read-only (базу не трогает). Показывает % совпадения бакетов, добор GeoIP по
+    «Not Stated» и топ расхождений — чтобы решить, можно ли доверять пути без UI."""
+    import csv
+    from collections import Counter
+    from lib import buckets, geoip
+
+    src = Path(args.csv or cfg.get("report_input", ""))
+    if not src.exists():
+        sys.exit(f"CSV не найдена: {src} (--csv ПУТЬ)")
+    if src.is_dir():
+        cands = sorted(src.rglob("*.csv"))
+        if not cands:
+            sys.exit(f"В {src} нет *.csv")
+        src = cands[-1]          # самая свежая по имени
+    geo_db = cfg.get("geoip_db", "")
+    if not geoip.available(geo_db):
+        sys.exit(f"GeoIP недоступен (geoip_db={geo_db!r}). Нужен .mmdb + pip install maxminddb.")
+    gp = DATA_DIR / "geoip_cache.json"
+    cache = geoip.load_cache(gp)
+
+    agree = disagree = recovered = geo_miss = both_none = 0
+    mism = Counter()
+    with src.open(encoding="utf-8-sig", newline="") as fh:
+        sample = fh.read(8192); fh.seek(0)
+        try:
+            delim = csv.Sniffer().sniff(sample, delimiters=",;\t").delimiter
+        except csv.Error:
+            delim = ","
+        reader = csv.reader(fh, delimiter=delim)
+        header = next(reader, None) or []
+        ic = _find_col(header, "Country")
+        ip = _find_col(header, "IP")
+        if ic < 0 or ip < 0:
+            sys.exit(f"Нужны колонки Country и IP. Шапка: {header}")
+        for row in reader:
+            if len(row) <= max(ic, ip):
+                continue
+            gb = buckets.bucket_for_country(buckets.resolve_country(row[ic]))
+            name = geoip.country_name_by_ip(row[ip], geo_db, cache)
+            eb = buckets.bucket_for_country(buckets.resolve_country(name)) if name else None
+            gsa_ns = gb == buckets.NOT_STATED_FILE
+            geo_ns = eb is None or eb == buckets.NOT_STATED_FILE
+            if not gsa_ns and not geo_ns:
+                if gb == eb:
+                    agree += 1
+                else:
+                    disagree += 1
+                    mism[f"{gb} → {eb}"] += 1
+            elif gsa_ns and not geo_ns:
+                recovered += 1
+            elif not gsa_ns and geo_ns:
+                geo_miss += 1
+            else:
+                both_none += 1
+    geoip.save_cache(gp, cache)
+
+    determined = agree + disagree
+    pct = (agree / determined * 100) if determined else 0.0
+    print(f"GeoIP-сверка: {src.name}")
+    print(f"Обе стороны определили страну: {determined:,} | "
+          f"СОГЛАСИЕ бакетов: {agree:,} ({pct:.1f}%), расхождений: {disagree:,}")
+    print(f"GSA «Not Stated», GeoIP определил (добор): {recovered:,}")
+    print(f"GSA определил, GeoIP нет (нет IP/записи): {geo_miss:,}")
+    print(f"Обе не определили: {both_none:,}")
+    if mism:
+        print("── топ расхождений (бакет GSA → бакет GeoIP) ──")
+        for pair, n in mism.most_common(15):
+            print(f"  {pair}: {n:,}")
+
+
 def cmd_report(cfg: dict, args) -> None:
     """Статистика по verified из GSA-CSV — ЗАМЕНА ручного split1404. Раскладывает
     verified-ссылки по странам-бакетам (логика split1404 1:1), инкрементно дописывает
@@ -1170,6 +1242,8 @@ def main() -> None:
     ap.add_argument("--report", action="store_true",
                     help="статистика по бакетам стран из GSA verified CSV (+GeoIP по IP)")
     ap.add_argument("--csv", help="путь к GSA verified CSV или папке (для --report)")
+    ap.add_argument("--geocheck", action="store_true",
+                    help="сверка Country из GSA-CSV против нашего GeoIP по IP (read-only)")
     ap.add_argument("--export", action="store_true",
                     help="выгрузить verified-результаты в CSV (страна по ccTLD) на шару")
     ap.add_argument("--full", action="store_true",
@@ -1220,6 +1294,9 @@ def main() -> None:
     if args.test_telegram:
         from lib import telegram
         raise SystemExit(telegram.test_telegram(cfg))
+    if args.geocheck:
+        cmd_geocheck(cfg, args)
+        return
     if args.report:
         cmd_report(cfg, args)
         return
