@@ -238,13 +238,29 @@ def export_verified(cfg, out_path, log) -> bool:
         # 4) диалог «Сохранить как»
         _save_dialog(out_path, pause, wait, log)
 
-        # подтверждение: ждём появления файла
-        for _ in range(int(cfg.get("ui_export_settle_sec", 20) or 20)):
-            if out_path.exists() and out_path.stat().st_size > 0:
-                log.info(f"ui: выгрузка готова → {out_path} "
-                         f"({out_path.stat().st_size:,} байт)")
-                return True
+        # подтверждение: ждём не просто появления файла, а СТАБИЛИЗАЦИИ его размера —
+        # GSA пишет большой отчёт постепенно, и size>0 наступает уже на первой строке
+        # (шапке). Иначе --report прочитает файл с одной шапкой → «Строк не найдено».
+        prev = -1
+        stable = 0
+        need = int(cfg.get("ui_export_stable_checks", 3) or 3)  # подряд неизменных проверок
+        for _ in range(int(cfg.get("ui_export_settle_sec", 30) or 30)):
             time.sleep(1)
+            if not out_path.exists():
+                continue
+            size = out_path.stat().st_size
+            if size > 0 and size == prev:
+                stable += 1
+                if stable >= need:
+                    log.info(f"ui: выгрузка готова → {out_path} ({size:,} байт)")
+                    return True
+            else:
+                stable = 0
+            prev = size
+        if out_path.exists() and out_path.stat().st_size > 0:
+            log.info(f"ui: выгрузка есть, но размер не стабилизировался → {out_path} "
+                     f"({out_path.stat().st_size:,} байт) — возможно, ещё пишется")
+            return True
         log.error(f"ui: файл не появился: {out_path}. Проверьте ui_export_menu_seq / "
                   f"ui_export_trigger_seq по --ui-check и ручным шагам.")
         return False
