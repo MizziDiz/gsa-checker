@@ -1061,9 +1061,11 @@ def _distribute(cfg, projects_dir, eligible, selected, ext, apply, total_bytes, 
 
 
 def cmd_autopilot(cfg: dict, args) -> None:
-    """Server-9 модель: равномерно раздаёт цели из общего пула в АКТИВНЫЕ проекты
-    (исключая имена из autopilot_exclude_names — по имени, т.к. `last status` в .prj не
-    различает active/inactive). При остатке ниже autopilot_min_targets берёт новейшие
+    """Server-9 модель: равномерно раздаёт цели из общего пула ТОЛЬКО в проекты, чьё имя
+    содержит autopilot_include_names (по умолч. «Split»), минус autopilot_exclude_names.
+    Фильтр по ИМЕНИ, т.к. `last status` в .prj не различает active/inactive. (Читаем-то мы
+    verified со ВСЕХ проектов — см. --report, — а вот кормим только Split.)
+    При остатке ниже autopilot_min_targets берёт новейшие
     неиспользованные батчи из пула (до autopilot_batch_limit_mb суммарно), делит их цели
     ПОРОВНУ (каждому свой кусок, данные не стирает), переносит батчи в autopilot_used_dir
     и при --apply делает один --ui-refresh. Раз в месяц — напоминание обновить почты."""
@@ -1086,13 +1088,27 @@ def cmd_autopilot(cfg: dict, args) -> None:
     for err in data["errors"]:
         print(f"⚠ {err}", file=sys.stderr)
 
+    # Кормим ТОЛЬКО проекты из белого списка по имени (autopilot_include_names, по
+    # умолчанию «Split»), а внутри него ещё и режем чёрным списком — так новый проект не
+    # начнёт получать цели просто потому, что появился в папке.
+    incl = [i.lower() for i in as_list(cfg.get("autopilot_include_names", ["Split"]))]
     excl = [e.lower() for e in as_list(cfg.get("autopilot_exclude_names",
                                                ["CC", "TEST", "Common"]))]
-    eligible = sorted((r for r in data["projects"]
-                       if not any(e in r["name"].lower() for e in excl)),
+
+    def _feedable(name: str) -> bool:
+        n = name.lower()
+        if incl and not any(i in n for i in incl):
+            return False
+        return not any(e in n for e in excl)
+
+    eligible = sorted((r for r in data["projects"] if _feedable(r["name"])),
                       key=lambda r: r["name"])
     print(f"Проектов всего {len(data['projects'])}, кормим {len(eligible)} "
-          f"(исключаем содержащие: {', '.join(excl) or '—'})")
+          f"(только с именем ~ {', '.join(incl) or 'любое'}"
+          f"{'; минус ' + ', '.join(excl) if excl else ''})")
+    if not eligible:
+        print("⚠ Под фильтр не попал ни один проект — проверь autopilot_include_names.",
+              file=sys.stderr)
 
     if eligible:
         min_left = min(r["remaining"] for r in eligible)
