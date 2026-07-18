@@ -210,8 +210,35 @@ python gsa_checker.py --report --csv "\\share\...\Verified.csv"   # источн
 > твой `select_links_by_targets`. gsa-checker ведёт `out_country_buckets` вместо ручного
 > `split1404` (не запускай оба на одной базе одновременно).
 
-### Недельный автозапуск (по понедельникам)
-Штатный путь — **без UI**, одной командой в планировщике Windows (следующий пн — 2026-07-20):
+### Централизованная недельная схема (несколько серверов → шара)
+Когда серверов несколько (9, 17, …): каждый **выкладывает свои `.success` на шару**, а
+**шара** раз в неделю мержит их вместе, шлёт сводку и **отдельным сообщением недобор по
+KPI**.
+
+**1. На каждом сервере (`--collect-success`, пн 06:00 МСК):** копирует `*.success` из
+`gsa_projects_dir` в `success_share_dir/<server_name>/` (папку сервера предварительно
+чистит). В конфиге сервера задать `server_name` (напр. `"9"`, `"17"`) и `success_share_dir`.
+```
+schtasks /Create /SC WEEKLY /D MON /ST 06:00 /TN "gsa-collect" ^
+  /TR "python C:\A-GSA\gsa_checker.py --collect-success"
+```
+**2. На шаре (`--report`, пн 12:00 МСК):** `gsa_projects_dir` = `success_share_dir` (папка с
+подпапками серверов); `--report` читает `.success` **рекурсивно со всех серверов**,
+дедупит между ними, дописывает новое в `out_country_buckets` и шлёт **2 сообщения**:
+(1) сводку `debug_summary`, (2) **недобор по KPI** (если задан `kpi_targets`). Cron на
+шаре (Linux), 12:00 МСК:
+```
+0 12 * * 1  cd /srv/gsa-checker && TZ=Europe/Moscow python3 gsa_checker.py --report
+```
+> Разнос 06:00→12:00 даёт всем серверам время выложиться до мержа. KPI-сообщение шлёт
+> только тот, у кого в конфиге есть `kpi_targets` (т.е. шара) — серверы-сборщики его не шлют.
+
+**KPI (`kpi_targets`)** — список групп `{label, target, buckets}`: недельная цель прироста
+по группе и какие бакет-файлы в неё входят. Недобор = `target − прибавка_за_неделю` (по
+сумме `added` бакетов группы). Пример — в `config.example.json`.
+
+### Одиночный сервер: недельный автозапуск
+Если сервер один — без шары, одной командой (следующий пн — 2026-07-20):
 ```
 schtasks /Create /SC WEEKLY /D MON /ST 09:00 /TN "gsa-weekly-report" ^
   /TR "python C:\A-GSA\gsa_checker.py --report"

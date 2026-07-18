@@ -371,11 +371,14 @@ def _iter_verified(cfg: dict, args):
     if not proj.is_dir():
         sys.exit(f"Папка проектов не найдена: {proj} (gsa_projects_dir в конфиге)")
     globs = cfg.get("verified_glob", ["*.success"])
-    files = sorted({p for g in globs for p in proj.glob(g)})
+    # rglob — чтобы на ШАРЕ подхватить .success из подпапок всех серверов
+    # (success_share_dir/9/*.success, /17/*.success), а на одиночном сервере — из
+    # самой папки проектов (глубина 0 тоже попадает).
+    files = sorted({p for g in globs for p in proj.rglob(g)})
     if not files:
         sys.exit(f"В {proj} нет verified-файлов ({globs}). Проверь gsa_projects_dir/"
                  f"verified_glob (--check покажет реальные расширения).")
-    print(f"Источник: .success с диска — {len(files)} проект(ов)")
+    print(f"Источник: .success с диска — {len(files)} файл(ов)")
     for f in files:
         try:
             data = f.read_bytes()
@@ -392,6 +395,78 @@ def _iter_verified(cfg: dict, args):
             code = fl[-2].decode("utf-8", "replace").strip()
             ipv = fl[-1].decode("utf-8", "replace").strip()
             yield url, iso2.name_for(code), ipv
+
+
+def cmd_collect_success(cfg: dict, args) -> None:
+    """Копирует .success ЭТОГО сервера на шару в подпапку по имени сервера
+    (`success_share_dir`/`server_name`), чтобы центральный --report на шаре слил verified
+    со всех серверов. Ставить в планировщик КАЖДОГО сервера (пн 06:00 МСК). Папку сервера
+    чистит от старых .success перед копированием (удалённые проекты не зависают)."""
+    import shutil
+    proj = Path(cfg.get("gsa_projects_dir", ""))
+    if not proj.is_dir():
+        sys.exit(f"Папка проектов не найдена: {proj} (gsa_projects_dir)")
+    root = cfg.get("success_share_dir", "")
+    if not root:
+        sys.exit("Не задан success_share_dir (куда на шаре складывать .success).")
+    name = str(cfg.get("server_name", "")).strip()
+    if not name:
+        sys.exit("Не задан server_name (подпапка на шаре для этого сервера).")
+    dest = Path(root) / name
+    globs = as_list(cfg.get("verified_glob", ["*.success"]))
+    files = sorted({p for g in globs for p in proj.glob(g)})
+    if not files:
+        sys.exit(f"В {proj} нет .success ({globs}).")
+    dry = getattr(args, "dry_run", False)
+
+    total = sum(f.stat().st_size for f in files)
+    print(f"{'[dry] ' if dry else ''}Сервер {name}: {len(files)} .success "
+          f"({total/1e6:.1f} МБ) → {dest}")
+    if dry:
+        return
+    dest.mkdir(parents=True, exist_ok=True)
+    for old in dest.glob("*.success"):     # убрать прошлую выгрузку (в т.ч. удалённые проекты)
+        try:
+            old.unlink()
+        except OSError:
+            pass
+    for f in files:
+        shutil.copy2(f, dest / f.name)
+    (dest / "_collected.txt").write_text(
+        time.strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
+    print(f"✓ выложено на шару: {dest}")
+
+
+def _kpi_report(cfg: dict, added: dict):
+    """Недобор по KPI: по каждой KPI-группе (`kpi_targets`: label/target/buckets) считает
+    прибавку за неделю (сумма added по её бакетам) и недобор target−прибавка. Возвращает
+    текст для Telegram или None, если kpi_targets не задан (напр. на серверах-сборщиках)."""
+    kpi = cfg.get("kpi_targets") or []
+    if not kpi:
+        return None
+    rows = []
+    tot_t = tot_a = tot_s = 0
+    for g in kpi:
+        tgt = int(g.get("target", 0) or 0)
+        bks = as_list(g.get("buckets", []))
+        got = sum(int(added.get(b, 0)) for b in bks)
+        short = max(0, tgt - got)
+        rows.append((short, g.get("label", "?"), got, tgt))
+        tot_t += tgt
+        tot_a += got
+        tot_s += short
+    rows.sort(key=lambda r: -r[0])
+    lines = [f"{'❌' if s > 0 else '✅'} {label}: +{got}/{tgt}" + (f"  (−{s})" if s > 0 else "")
+             for s, label, got, tgt in rows]
+    head = (f"🎯 <b>Недобор по KPI</b> ({telegram_label(cfg)})\n"
+            f"добрано {tot_a}/{tot_t}, суммарный недобор <b>{tot_s}</b>\n\n")
+    return head + "\n".join(lines)
+
+
+def telegram_label(cfg: dict) -> str:
+    from lib import telegram
+    return telegram.server_label(cfg) if hasattr(telegram, "server_label") \
+        else str(cfg.get("server_name", "gsa"))
 
 
 def cmd_report(cfg: dict, args) -> None:
@@ -514,13 +589,17 @@ def cmd_report(cfg: dict, args) -> None:
         rep.write_text(summary, encoding="utf-8")
         print(f"✓ отчёт: {rep}")
 
-    # Telegram — тот же формат (страна ВСЕГО (+новых) … ИТОГО)
-    label = telegram.server_label(cfg) if hasattr(telegram, "server_label") else \
-        cfg.get("server_name", "gsa")
-    tg = (f"📊 <b>GSA verified — недельная сводка</b> ({label})\n"
+    # Telegram, сообщение 1 — сводка (страна ВСЕГО (+новых) … ИТОГО)
+    tg = (f"📊 <b>GSA verified — недельная сводка</b> ({telegram_label(cfg)})\n"
           f"Добавлено новых: <b>{total_added}</b>\n\n"
           + "\n".join(body_lines) + f"\n\n{ns_line}\n\n<b>ИТОГО {total_lines}</b>")
     telegram.send(cfg, tg)
+
+    # Telegram, сообщение 2 — недобор по KPI (только если задан kpi_targets)
+    kpi = _kpi_report(cfg, added)
+    if kpi:
+        print("\n" + kpi.replace("<b>", "").replace("</b>", ""))
+        telegram.send(cfg, kpi)
 
 
 def cmd_ui_export(cfg: dict, args) -> None:
@@ -1299,6 +1378,8 @@ def main() -> None:
     ap.add_argument("--csv", help="путь к GSA verified CSV или папке (для --report)")
     ap.add_argument("--geocheck", action="store_true",
                     help="сверка Country из GSA-CSV против нашего GeoIP по IP (read-only)")
+    ap.add_argument("--collect-success", action="store_true",
+                    help="выложить .success этого сервера на шару (success_share_dir/<server>)")
     ap.add_argument("--export", action="store_true",
                     help="выгрузить verified-результаты в CSV (страна по ccTLD) на шару")
     ap.add_argument("--full", action="store_true",
@@ -1349,6 +1430,9 @@ def main() -> None:
     if args.test_telegram:
         from lib import telegram
         raise SystemExit(telegram.test_telegram(cfg))
+    if args.collect_success:
+        cmd_collect_success(cfg, args)
+        return
     if args.geocheck:
         cmd_geocheck(cfg, args)
         return
