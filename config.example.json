@@ -41,6 +41,8 @@
   "report_out_dir": "\\\\10.10.10.50\\шара\\GSA verified export\\reports",
   "buckets_dir": "\\\\10.10.10.50\\шара\\Split\\out_country_buckets",
   "success_share_dir": "\\\\10.10.10.50\\шара\\gsa_success",
+  "expected_servers": ["9", "17"],
+  "collect_stale_hours": 24,
   "kpi_targets": [
     {"label": "🌎 Латам (исп.)", "target": 75, "buckets": ["latam.txt"]},
     {"label": "🇨🇴 Колумбия", "target": 15, "buckets": ["Colombia.txt"]},

@@ -463,6 +463,55 @@ def _kpi_report(cfg: dict, added: dict):
     return head + "\n".join(lines)
 
 
+def _collection_status(cfg: dict):
+    """Свежесть выгрузки .success по серверам (для центрального мержа на шаре): по каждой
+    подпапке success_share_dir смотрит метку `_collected.txt`. Возвращает список
+    (server, ok, when) или None, если это не шара (нет подпапок с выгрузкой / одиночный
+    сервер). Ожидаемых серверов можно задать явно (`expected_servers`) — тогда полностью
+    не выложившийся сервер (папки нет) тоже попадёт в отчёт как ⚠."""
+    root = Path(cfg.get("gsa_projects_dir", ""))
+    if not root.is_dir():
+        return None
+    stale_h = float(cfg.get("collect_stale_hours", 24) or 24)
+    now = time.time()
+    found = {}                       # server -> (mtime, человекочитаемая метка)
+    for sub in root.iterdir():
+        if not sub.is_dir():
+            continue
+        marker = sub / "_collected.txt"
+        ts = when = None
+        if marker.exists():
+            ts = marker.stat().st_mtime
+            when = (marker.read_text(encoding="utf-8", errors="replace").strip().splitlines()
+                    or [""])[0]
+        else:
+            succ = list(sub.glob("*.success"))
+            if succ:
+                ts = max(f.stat().st_mtime for f in succ)
+                when = time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
+        if ts is not None:
+            found[sub.name] = (ts, when)
+    servers = [str(s) for s in as_list(cfg.get("expected_servers", []))] or sorted(found)
+    if not servers:
+        return None
+    rows = []
+    for s in servers:
+        rec = found.get(s)
+        if rec is None:
+            rows.append((s, False, "не выложился"))
+        else:
+            ts, when = rec
+            ok = (now - ts) <= stale_h * 3600
+            rows.append((s, ok, when if ok else f"устарел ({when})"))
+    return rows
+
+
+def _status_line(rows) -> str:
+    """(server, ok, when) → одна строка «Серверы: 9 ✓ (…), 17 ⚠ не выложился»."""
+    parts = [f"{s} {'✓' if ok else '⚠'} ({when})" for s, ok, when in rows]
+    return "Серверы: " + ", ".join(parts)
+
+
 def telegram_label(cfg: dict) -> str:
     from lib import telegram
     return telegram.server_label(cfg) if hasattr(telegram, "server_label") \
@@ -579,6 +628,14 @@ def cmd_report(cfg: dict, args) -> None:
                f"{buckets.fmt_added(added.get(buckets.NOT_STATED_FILE, 0))}")
     summary = head + "\n" + "\n".join(body_lines) + f"\n\n{ns_line}\n\nИТОГО {total_lines}\n"
 
+    # свежесть выгрузки по серверам (только для центрального мержа на шаре)
+    status = None if args.csv else _collection_status(cfg)
+    if status:
+        line = _status_line(status)
+        summary += line + "\n"
+        if any(not ok for _, ok, _ in status):
+            print("⚠ " + line, file=sys.stderr)
+
     print(summary + ("\n[dry-run: база не изменена]" if dry else ""))
 
     out_dir = Path(cfg.get("report_out_dir") or (DATA_DIR / "reports"))
@@ -600,7 +657,10 @@ def cmd_report(cfg: dict, args) -> None:
         return
 
     # Telegram, сообщение 1 — сводка (страна ВСЕГО (+новых) … ИТОГО)
-    tg = (f"📊 <b>GSA verified — недельная сводка</b> ({telegram_label(cfg)})\n"
+    warn = ("\n⚠ <b>" + _status_line(status) + "</b>"
+            if status and any(not ok for _, ok, _ in status) else
+            ("\n" + _status_line(status) if status else ""))
+    tg = (f"📊 <b>GSA verified — недельная сводка</b> ({telegram_label(cfg)}){warn}\n"
           f"Добавлено новых: <b>{total_added}</b>\n\n"
           + "\n".join(body_lines) + f"\n\n{ns_line}\n\n<b>ИТОГО {total_lines}</b>")
     telegram.send(cfg, tg)
