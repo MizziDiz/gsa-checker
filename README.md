@@ -226,10 +226,13 @@ schtasks /Create /SC WEEKLY /D MON /ST 06:00 /TN "gsa-collect" ^
 подпапками серверов); `--report` читает `.success` **рекурсивно со всех серверов**,
 дедупит между ними, дописывает новое в `out_country_buckets` и шлёт **2 сообщения**:
 (1) сводку `debug_summary`, (2) **недобор по KPI** (если задан `kpi_targets`). Cron на
-шаре (Linux), 12:00 МСК:
+шаре. **Если машина в UTC** — 12:00 МСК = **09:00 UTC**:
 ```
-0 12 * * 1  cd /srv/gsa-checker && TZ=Europe/Moscow python3 gsa_checker.py --report
+0 9 * * 1  cd /root/gsa-checker && /usr/bin/python3 gsa_checker.py --report >> /srv/share/Split/reports/cron.log 2>&1
 ```
+(если TZ машины = МСК, ставь `0 12 * * 1`). Конфиг шары: `gsa_projects_dir`=
+`success_share_dir`, `buckets_dir`, `kpi_targets`, `geoip_db`, telegram. `--report --dry-run`
+считает и печатает, но **в Telegram ничего не шлёт**.
 > Разнос 06:00→12:00 даёт всем серверам время выложиться до мержа. KPI-сообщение шлёт
 > только тот, у кого в конфиге есть `kpi_targets` (т.е. шара) — серверы-сборщики его не шлют.
 
