@@ -589,16 +589,23 @@ def cmd_report(cfg: dict, args) -> None:
         rep.write_text(summary, encoding="utf-8")
         print(f"✓ отчёт: {rep}")
 
+    # KPI-текст считаем всегда (для консоли), но ОТПРАВКУ в Telegram — только в боевом
+    # прогоне: --dry-run ничего наружу не шлёт.
+    kpi = _kpi_report(cfg, added)
+    if kpi:
+        print("\n" + kpi.replace("<b>", "").replace("</b>", ""))
+
+    if dry:
+        print("\n[dry-run: Telegram не отправлялся]")
+        return
+
     # Telegram, сообщение 1 — сводка (страна ВСЕГО (+новых) … ИТОГО)
     tg = (f"📊 <b>GSA verified — недельная сводка</b> ({telegram_label(cfg)})\n"
           f"Добавлено новых: <b>{total_added}</b>\n\n"
           + "\n".join(body_lines) + f"\n\n{ns_line}\n\n<b>ИТОГО {total_lines}</b>")
     telegram.send(cfg, tg)
-
     # Telegram, сообщение 2 — недобор по KPI (только если задан kpi_targets)
-    kpi = _kpi_report(cfg, added)
     if kpi:
-        print("\n" + kpi.replace("<b>", "").replace("</b>", ""))
         telegram.send(cfg, kpi)
 
 
