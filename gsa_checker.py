@@ -1079,10 +1079,35 @@ def _email_reminder(cfg: dict, telegram) -> None:
 
 
 def _distribute(cfg, projects_dir, eligible, selected, ext, apply, total_bytes, telegram) -> None:
-    """Собирает цели из выбранных батчей (дедуп) и раздаёт ПОРОВНУ по проектам."""
+    """Собирает цели из выбранных батчей (дедуп) и раздаёт ПОРОВНУ по проектам.
+    При --apply СНАЧАЛА атомарно «забирает» батчи из пула (move в used_dir) и раздаёт
+    только реально захваченное — чтобы при ОБЩЕМ пуле с другим сервером один и тот же
+    батч не ушёл дважды (кто первый перенёс — того и батч; у второго move упадёт → skip)."""
+    import shutil
+
+    batches = selected
+    if apply:
+        used_dir = Path(cfg.get("autopilot_used_dir")
+                        or (selected[0].parent.parent / "Aparser results used"))
+        used_dir.mkdir(parents=True, exist_ok=True)
+        claimed = []
+        for f in selected:
+            try:
+                dst = used_dir / f.name
+                shutil.move(str(f), str(dst))       # атомарный захват батча из пула
+            except (OSError, shutil.Error):
+                print(f"  батч {f.name} уже забран другим сервером — пропуск")
+                continue
+            claimed.append(dst)
+            _append_journal({"action": "batch", "batch": f.name})
+        batches = claimed
+        if not batches:
+            print("Все выбранные батчи забраны другим сервером — цикл пропущен.")
+            return
+
     seen, targets = set(), []
     skipped, bad = 0, []
-    for f in selected:
+    for f in batches:
         urls, total, valid = _collect_urls(f, seen)
         skipped += (total - valid)
         if total > 0 and valid == 0:
@@ -1093,11 +1118,12 @@ def _distribute(cfg, projects_dir, eligible, selected, ext, apply, total_bytes, 
     if bad:
         print(f"⚠ батчи без URL (пропущены как цели): {', '.join(bad[:5])}", file=sys.stderr)
     n = len(eligible)
-    names = ", ".join(f.name for f in selected[:5]) + (" …" if len(selected) > 5 else "")
-    print(f"Батчи ({len(selected)}, ~{total_bytes/1048576:.0f} МБ): {names}")
+    names = ", ".join(f.name for f in batches[:5]) + (" …" if len(batches) > 5 else "")
+    claimed_mb = sum(f.stat().st_size for f in batches) / 1048576 if apply else total_bytes / 1048576
+    print(f"Батчи ({len(batches)}{' захвачено' if apply else ''}, ~{claimed_mb:.0f} МБ): {names}")
     print(f"Целей {len(targets):,} → поровну на {n} проект(ов) (~{len(targets)//n if n else 0:,}/проект)")
     if not targets:
-        print("Целей нет — пропуск.")
+        print("Целей нет — пропуск." + (" (захваченные батчи уже в used)" if apply else ""))
         return
 
     print(f"── автопилот: {'ЗАПИСЬ' if apply else 'СУХОЙ ПРОГОН (добавьте --apply)'} ──")
@@ -1113,17 +1139,8 @@ def _distribute(cfg, projects_dir, eligible, selected, ext, apply, total_bytes, 
 
     if not apply:
         return
-    # перенос разобранных батчей в used + журнал
-    import shutil
-    used_dir = Path(cfg.get("autopilot_used_dir")
-                    or (selected[0].parent.parent / "Aparser results used"))
-    used_dir.mkdir(parents=True, exist_ok=True)
-    for f in selected:
-        try:
-            shutil.move(str(f), str(used_dir / f.name))
-        except OSError as e:
-            print(f"⚠ не перенесён {f.name}: {e}", file=sys.stderr)
-        _append_journal({"action": "batch", "batch": f.name})
+    # батчи уже захвачены (перенесены в used) выше — сразу рефреш
+    selected = batches
     # один рефреш GSA в конце
     try:
         import logging
