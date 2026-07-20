@@ -8,3 +8,6 @@ __pycache__/
 # виртуальное окружение
 .venv/
 venv/
+
+# вывод select_projects.py
+selected_projects.txt
