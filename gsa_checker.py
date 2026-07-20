@@ -658,9 +658,11 @@ def cmd_report(cfg: dict, args) -> None:
     if kpi:
         print("\n" + kpi.replace("<b>", "").replace("</b>", ""))
 
-    if dry:
+    if dry and not getattr(args, "telegram", False):
         print("\n[dry-run: Telegram не отправлялся]")
         return
+    if dry:
+        print("\n[dry-run + --telegram: шлю в Telegram, база НЕ тронута]")
 
     # Telegram, сообщение 1 — сводка (страна ВСЕГО (+новых) … ИТОГО)
     warn = ("\n⚠ <b>" + _status_line(status) + "</b>"
@@ -1478,6 +1480,8 @@ def main() -> None:
     ap.add_argument("--report", action="store_true",
                     help="статистика по бакетам стран из GSA verified CSV (+GeoIP по IP)")
     ap.add_argument("--csv", help="путь к GSA verified CSV или папке (для --report)")
+    ap.add_argument("--telegram", action="store_true",
+                    help="при --dry-run всё равно отправить в Telegram (базу не трогает)")
     ap.add_argument("--geocheck", action="store_true",
                     help="сверка Country из GSA-CSV против нашего GeoIP по IP (read-only)")
     ap.add_argument("--collect-success", action="store_true",
