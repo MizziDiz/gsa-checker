@@ -86,6 +86,7 @@
   "autopilot_min_targets": 20000,
   "autopilot_batch_limit_mb": 120,
   "autopilot_append_ext": ".new_targets",
+  "autopilot_stats_dir": "\\\\10.10.10.50\\шара\\gsa_autopilot_stats",
   "autopilot_include_names": ["Split"],
   "autopilot_exclude_names": ["CC", "TEST", "Common"],
   "email_reminder_days": 30,
