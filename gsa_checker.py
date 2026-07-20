@@ -482,28 +482,34 @@ def _collection_status(cfg: dict):
         ts = when = None
         if marker.exists():
             ts = marker.stat().st_mtime
-            when = (marker.read_text(encoding="utf-8", errors="replace").strip().splitlines()
-                    or [""])[0]
         else:
             succ = list(sub.glob("*.success"))
             if succ:
                 ts = max(f.stat().st_mtime for f in succ)
-                when = time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
         if ts is not None:
-            found[sub.name] = (ts, when)
+            found[sub.name] = ts
     servers = [str(s) for s in as_list(cfg.get("expected_servers", []))] or sorted(found)
     if not servers:
         return None
     rows = []
     for s in servers:
-        rec = found.get(s)
-        if rec is None:
+        ts = found.get(s)
+        if ts is None:
             rows.append((s, False, "не выложился"))
         else:
-            ts, when = rec
+            # «сколько назад» по времени ПРИЁМА на шаре — не зависит от часов сервера
+            # (у серверов таймзоны/часы могут врать; наш ориентир — одна шара).
             ok = (now - ts) <= stale_h * 3600
-            rows.append((s, ok, when if ok else f"устарел ({when})"))
+            rows.append((s, ok, _ago(now - ts)))
     return rows
+
+
+def _ago(sec: float) -> str:
+    if sec < 3600:
+        return f"{int(sec // 60)} мин назад"
+    if sec < 86400:
+        return f"{sec / 3600:.1f} ч назад"
+    return f"{sec / 86400:.1f} дн назад"
 
 
 def _status_line(rows) -> str:
