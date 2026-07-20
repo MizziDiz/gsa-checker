@@ -1153,6 +1153,27 @@ def _email_reminder(cfg: dict, telegram) -> None:
     save_state(state)
 
 
+def _write_autopilot_stat(cfg: dict, rec: dict) -> None:
+    """Пишет строку статистики забора на шару: autopilot_stats_dir/<server_name>.jsonl
+    (append-only журнал по серверу) — сколько URL автопилот забрал из пула за прогон, для
+    сводной статистики. Если autopilot_stats_dir не задан — молча пропускает."""
+    d = cfg.get("autopilot_stats_dir", "")
+    if not d:
+        return
+    name = str(cfg.get("server_name", "gsa")).strip() or "gsa"
+    path = Path(d) / f"{name}.jsonl"
+    line = json.dumps({"ts": int(time.time()),
+                       "date": time.strftime("%Y-%m-%d %H:%M:%S"),
+                       "server": name, **rec}, ensure_ascii=False)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+        print(f"✓ статистика забора на шару: {path} ({rec.get('urls', 0):,} URL)")
+    except OSError as e:
+        print(f"⚠ статистику на шару не записать ({path}): {e}", file=sys.stderr)
+
+
 def _distribute(cfg, projects_dir, eligible, selected, ext, apply, total_bytes, telegram) -> None:
     """Собирает цели из выбранных батчей (дедуп) и раздаёт ПОРОВНУ по проектам.
     При --apply СНАЧАЛА атомарно «забирает» батчи из пула (move в used_dir) и раздаёт
@@ -1226,6 +1247,15 @@ def _distribute(cfg, projects_dir, eligible, selected, ext, apply, total_bytes, 
         print("⚠ рефреш пропущен (pywinauto не установлен / не Windows).")
     except Exception as e:
         print(f"⚠ рефреш не удался: {e}", file=sys.stderr)
+
+    # статистика забора на шару (сколько URL забрали из пула за прогон)
+    _write_autopilot_stat(cfg, {
+        "urls": len(targets),          # роздано целей (после дедупа)
+        "batches": len(selected),      # захвачено батчей
+        "projects": n,                 # в сколько проектов
+        "mb": round(claimed_mb, 1),
+        "skipped_nonurl": skipped,     # отсеяно строк-не-URL
+    })
     telegram.send(cfg, f"🤖 <b>Автопилот</b>\n{len(targets):,} целей поровну в {n} "
                        f"проект(ов) (~{len(targets)//n:,}/проект), батчей {len(selected)}. "
                        "Рефреш выполнен.")
