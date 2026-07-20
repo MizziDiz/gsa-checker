@@ -1448,7 +1448,19 @@ def cmd_check(cfg: dict) -> None:
             print(f"  {ext or '(без расширения)':<14} {n}")
 
 
+def _force_utf8_output() -> None:
+    """Печать в UTF-8 независимо от окружения. На русской Windows при выводе в файл/пайп
+    (планировщик с редиректом в лог) Python берёт cp1251, и символы ≥ → ✓ ⚠ эмодзи
+    падают с UnicodeEncodeError. reconfigure + errors=replace убирает это раз и навсегда."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main() -> None:
+    _force_utf8_output()
     ap = argparse.ArgumentParser(description="GSA SER checker")
     ap.add_argument("--remaining", action="store_true",
                     help="остаток целей по проектам")
