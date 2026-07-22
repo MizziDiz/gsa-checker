@@ -34,6 +34,7 @@
   "create_out_dir": "C:\\A-GSA\\created",
   "emails_per_project": 20,
   "email_provider_ini": "Generator.email.ini",
+  "keep_engines_file": "\\\\10.10.10.50\\шара\\gsa_settings\\keep_engines.txt",
   "email_domains": [],
   "input_share_dir": "\\\\SERVER1\\share\\for_gsa_ser",
   "export_dir": "\\\\10.10.10.50\\шара\\GSA verified export",

@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Статистика по регионам</title>
+<style>
+:root{
+  --plane:#f9f9f7; --surface:#fcfcfb; --ink:#0b0b0b; --ink2:#52514e;
+  --muted:#898781; --grid:#e1e0d9; --baseline:#c3c2b7; --border:rgba(11,11,11,.10);
+  --blue:#2a78d6; --track:#cde2fb;
+  --good:#0ca30c; --warning:#fab219; --serious:#ec835a; --critical:#d03b3b;
+  --good-ink:#006300;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:where(:not([data-theme=light])){
+  --plane:#0d0d0d; --surface:#1a1a19; --ink:#fff; --ink2:#c3c2b7;
+  --muted:#898781; --grid:#2c2c2a; --baseline:#383835; --border:rgba(255,255,255,.10);
+  --blue:#3987e5; --track:#184f95; --good-ink:#0ca30c; color-scheme:dark;
+}}
+:root[data-theme=dark]{
+  --plane:#0d0d0d; --surface:#1a1a19; --ink:#fff; --ink2:#c3c2b7;
+  --muted:#898781; --grid:#2c2c2a; --baseline:#383835; --border:rgba(255,255,255,.10);
+  --blue:#3987e5; --track:#184f95; --good-ink:#0ca30c; color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--plane);color:var(--ink);
+  font-family:system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.45}
+.wrap{max-width:1100px;margin:0 auto;padding:24px 20px 64px}
+header{display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:8px}
+h1{font-size:20px;margin:0;font-weight:600}
+.sub{color:var(--muted);font-size:13px}
+.theme-btn{margin-left:auto;background:var(--surface);border:1px solid var(--border);
+  color:var(--ink2);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:13px}
+section{background:var(--surface);border:1px solid var(--border);border-radius:12px;
+  padding:18px 20px;margin-top:16px}
+h2{font-size:14px;margin:0 0 14px;font-weight:600;letter-spacing:.01em}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}
+.tile{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px}
+.tile .lbl{color:var(--ink2);font-size:13px;margin-bottom:6px}
+.tile .val{font-size:34px;font-weight:600;letter-spacing:-.01em}
+.tile.hero .val{font-size:52px}
+.tile .val small{font-size:15px;color:var(--muted);font-weight:400}
+.tile .delta{font-size:13px;color:var(--good-ink);margin-top:2px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--grid);vertical-align:middle}
+th{color:var(--muted);font-weight:500;font-size:12px}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+.bar-cell{width:46%}
+.track{position:relative;height:12px;background:var(--track);border-radius:4px;overflow:hidden}
+.track.vol{background:var(--grid)}
+td.rank{color:var(--muted);width:34px}
+.fill{position:absolute;left:0;top:0;bottom:0;border-radius:4px 0 0 4px;background:var(--blue)}
+.fill.good{background:var(--good)} .fill.warning{background:var(--warning)}
+.fill.critical{background:var(--critical)}
+.pill{font-size:11px;padding:1px 7px;border-radius:20px;border:1px solid var(--border);color:var(--ink2)}
+.deficit{color:var(--critical);font-variant-numeric:tabular-nums}
+.ok{color:var(--good-ink)}
+.crow{display:flex;align-items:center;gap:10px;padding:3px 0}
+.crow .cn{width:190px;flex:0 0 190px;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.crow .ct{flex:1;height:14px;background:transparent;position:relative}
+.crow .cf{position:absolute;left:0;top:0;bottom:0;background:var(--blue);border-radius:0 4px 4px 0;min-width:2px}
+.crow .cv{width:96px;flex:0 0 96px;text-align:right;font-size:12px;font-variant-numeric:tabular-nums;color:var(--ink2)}
+.crow .cv b{color:var(--good-ink);font-weight:500}
+.foot{color:var(--muted);font-size:12px;margin-top:22px;text-align:center}
+.servers{font-size:13px;color:var(--ink2)}
+.trend{display:flex;align-items:flex-end;gap:14px;height:120px;padding-top:8px}
+.tcol{display:flex;flex-direction:column;align-items:center;gap:6px;flex:0 0 auto}
+.tbar{width:34px;background:var(--blue);border-radius:4px 4px 0 0;min-height:2px}
+.tcap{font-size:11px;color:var(--ink2);font-variant-numeric:tabular-nums}
+.tdate{font-size:11px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div>
+    <h1>Еженедельная статистика по регионам</h1>
+    <div class="sub">Данные за неделю: 2026-07-20 · источники: Источник 1 ✓ (45 мин назад), Источник 2 ✓ (45 мин назад)</div>
+  </div>
+  <button class="theme-btn" id="tt">◐ тема</button>
+</header>
+
+<div class="tiles">
+  <div class="tile hero"><div class="lbl">Всего в базе</div><div class="val">52 820</div></div>
+  <div class="tile"><div class="lbl">Добавлено за неделю</div><div class="val">1 778</div>
+    <div class="delta">за неделю 2026-07-20</div></div>
+  <div class="tile"><div class="lbl">Выполнение плана (прирост)</div>
+    <div class="val">537 <small>/ 440</small></div>
+    <div class="delta">122% недельного плана</div></div>
+  <div class="tile"><div class="lbl">Источники</div><div class="val" style="font-size:20px;padding-top:10px">
+    <span class="servers">Источник 1 ✓ (45 мин назад), Источник 2 ✓ (45 мин назад)</span></div></div>
+</div>
+
+<section>
+  <h2>Лучшие по приросту за неделю — план (440)</h2>
+  <table>
+    <thead><tr><th>Регион</th><th class="num">прирост / план</th>
+      <th class="bar-cell">выполнение</th><th class="num">недобор</th></tr></thead>
+    <tbody><tr><td>🇨🇱 Чили</td><td class="num">0 / 5</td><td class="bar-cell"><div class="track" title="0/5 (0%)"><div class="fill critical" style="width:0.0%"></div></div></td><td class="num"><span class="deficit">−5</span></td></tr><tr><td>🇪🇨 Эквадор</td><td class="num">0 / 5</td><td class="bar-cell"><div class="track" title="0/5 (0%)"><div class="fill critical" style="width:0.0%"></div></div></td><td class="num"><span class="deficit">−5</span></td></tr><tr><td>🌎 Латам (исп.)</td><td class="num">5 / 75</td><td class="bar-cell"><div class="track" title="5/75 (7%)"><div class="fill critical" style="width:6.7%"></div></div></td><td class="num"><span class="deficit">−70</span></td></tr><tr><td>🇦🇷 Аргентина</td><td class="num">3 / 20</td><td class="bar-cell"><div class="track" title="3/20 (15%)"><div class="fill critical" style="width:15.0%"></div></div></td><td class="num"><span class="deficit">−17</span></td></tr><tr><td>🇵🇪 Перу</td><td class="num">2 / 5</td><td class="bar-cell"><div class="track" title="2/5 (40%)"><div class="fill critical" style="width:40.0%"></div></div></td><td class="num"><span class="deficit">−3</span></td></tr><tr><td>🇹🇷 Турция</td><td class="num">5 / 10</td><td class="bar-cell"><div class="track" title="5/10 (50%)"><div class="fill warning" style="width:50.0%"></div></div></td><td class="num"><span class="deficit">−5</span></td></tr><tr><td>🇻🇳 Вьетнам</td><td class="num">11 / 20</td><td class="bar-cell"><div class="track" title="11/20 (55%)"><div class="fill warning" style="width:55.0%"></div></div></td><td class="num"><span class="deficit">−9</span></td></tr><tr><td>🇧🇷 Бразилия</td><td class="num">23 / 40</td><td class="bar-cell"><div class="track" title="23/40 (57%)"><div class="fill warning" style="width:57.5%"></div></div></td><td class="num"><span class="deficit">−17</span></td></tr><tr><td>🇵🇱 Польша</td><td class="num">32 / 50</td><td class="bar-cell"><div class="track" title="32/50 (64%)"><div class="fill warning" style="width:64.0%"></div></div></td><td class="num"><span class="deficit">−18</span></td></tr><tr><td>🇿🇦 Южная Африка</td><td class="num">10 / 15</td><td class="bar-cell"><div class="track" title="10/15 (67%)"><div class="fill warning" style="width:66.7%"></div></div></td><td class="num"><span class="deficit">−5</span></td></tr><tr><td>🇵🇹 Португалия</td><td class="num">8 / 10</td><td class="bar-cell"><div class="track" title="8/10 (80%)"><div class="fill warning" style="width:80.0%"></div></div></td><td class="num"><span class="deficit">−2</span></td></tr><tr><td>🇨🇴 Колумбия</td><td class="num">13 / 15</td><td class="bar-cell"><div class="track" title="13/15 (87%)"><div class="fill warning" style="width:86.7%"></div></div></td><td class="num"><span class="deficit">−2</span></td></tr><tr><td>🌏 Азия 1 (Индонезия+Малайзия)</td><td class="num">39 / 45</td><td class="bar-cell"><div class="track" title="39/45 (87%)"><div class="fill warning" style="width:86.7%"></div></div></td><td class="num"><span class="deficit">−6</span></td></tr><tr><td>🌊 Океания</td><td class="num">18 / 20</td><td class="bar-cell"><div class="track" title="18/20 (90%)"><div class="fill warning" style="width:90.0%"></div></div></td><td class="num"><span class="deficit">−2</span></td></tr><tr><td>🇺🇾 Уругвай</td><td class="num">8 / 5</td><td class="bar-cell"><div class="track" title="8/5 (160%)"><div class="fill good" style="width:100.0%"></div></div></td><td class="num"><span class="ok">выполнено</span></td></tr><tr><td>🇹🇭 Таиланд</td><td class="num">19 / 10</td><td class="bar-cell"><div class="track" title="19/10 (190%)"><div class="fill good" style="width:100.0%"></div></div></td><td class="num"><span class="ok">выполнено</span></td></tr><tr><td>🇲🇽 Мексика</td><td class="num">11 / 5</td><td class="bar-cell"><div class="track" title="11/5 (220%)"><div class="fill good" style="width:100.0%"></div></div></td><td class="num"><span class="ok">выполнено</span></td></tr><tr><td>🌍 Другие страны Африки</td><td class="num">47 / 20</td><td class="bar-cell"><div class="track" title="47/20 (235%)"><div class="fill good" style="width:100.0%"></div></div></td><td class="num"><span class="ok">выполнено</span></td></tr><tr><td>🇯🇵 Япония</td><td class="num">58 / 20</td><td class="bar-cell"><div class="track" title="58/20 (290%)"><div class="fill good" style="width:100.0%"></div></div></td><td class="num"><span class="ok">выполнено</span></td></tr><tr><td>🇫🇷 Франция</td><td class="num">83 / 20</td><td class="bar-cell"><div class="track" title="83/20 (415%)"><div class="fill good" style="width:100.0%"></div></div></td><td class="num"><span class="ok">выполнено</span></td></tr><tr><td>🌏 Другие страны Азии</td><td class="num">142 / 25</td><td class="bar-cell"><div class="track" title="142/25 (568%)"><div class="fill good" style="width:100.0%"></div></div></td><td class="num"><span class="ok">выполнено</span></td></tr></tbody>
+  </table>
+</section>
+
+<section>
+  <h2>Прирост по неделям</h2>
+  <div class="trend"><div class="tcol"><div class="tcap">+1778</div><div class="tbar" style="height:100%" title="2026-07-20: +1778"></div><div class="tdate">07-20</div></div></div>
+</section>
+
+<section>
+  <h2>Лучшие по объёму базы — топ-40</h2>
+  <table>
+    <thead><tr><th class="num">#</th><th>Регион</th><th class="bar-cell">объём</th>
+      <th class="num">всего в базе</th><th class="num">+ неделя</th></tr></thead>
+    <tbody><tr><td class="rank num">1</td><td>🇺🇸 США</td><td class="bar-cell"><div class="track vol" title="9 363"><div class="fill" style="width:100.0%"></div></div></td><td class="num">9 363</td><td class="num"><b>+387</b></td></tr><tr><td class="rank num">2</td><td>🏳 Не указано</td><td class="bar-cell"><div class="track vol" title="7 653"><div class="fill" style="width:81.7%"></div></div></td><td class="num">7 653</td><td class="num"><b>+15</b></td></tr><tr><td class="rank num">3</td><td>🇪🇺 Другие страны Европы</td><td class="bar-cell"><div class="track vol" title="3 230"><div class="fill" style="width:34.5%"></div></div></td><td class="num">3 230</td><td class="num"><b>+224</b></td></tr><tr><td class="rank num">4</td><td>🇻🇳 Вьетнам</td><td class="bar-cell"><div class="track vol" title="3 033"><div class="fill" style="width:32.4%"></div></div></td><td class="num">3 033</td><td class="num"><b>+11</b></td></tr><tr><td class="rank num">5</td><td>🇵🇱 Польша</td><td class="bar-cell"><div class="track vol" title="2 336"><div class="fill" style="width:24.9%"></div></div></td><td class="num">2 336</td><td class="num"><b>+32</b></td></tr><tr><td class="rank num">6</td><td>🌎 Латинская Америка</td><td class="bar-cell"><div class="track vol" title="2 230"><div class="fill" style="width:23.8%"></div></div></td><td class="num">2 230</td><td class="num"><b>+5</b></td></tr><tr><td class="rank num">7</td><td>🇧🇷 Бразилия</td><td class="bar-cell"><div class="track vol" title="1 932"><div class="fill" style="width:20.6%"></div></div></td><td class="num">1 932</td><td class="num"><b>+23</b></td></tr><tr><td class="rank num">8</td><td>🇮🇳 Индия</td><td class="bar-cell"><div class="track vol" title="1 869"><div class="fill" style="width:20.0%"></div></div></td><td class="num">1 869</td><td class="num"><b>+22</b></td></tr><tr><td class="rank num">9</td><td>🇩🇪 Германия</td><td class="bar-cell"><div class="track vol" title="1 869"><div class="fill" style="width:20.0%"></div></div></td><td class="num">1 869</td><td class="num"><b>+113</b></td></tr><tr><td class="rank num">10</td><td>🇯🇵 Япония</td><td class="bar-cell"><div class="track vol" title="1 793"><div class="fill" style="width:19.1%"></div></div></td><td class="num">1 793</td><td class="num"><b>+58</b></td></tr><tr><td class="rank num">11</td><td>🇮🇩 Индонезия</td><td class="bar-cell"><div class="track vol" title="1 769"><div class="fill" style="width:18.9%"></div></div></td><td class="num">1 769</td><td class="num"><b>+35</b></td></tr><tr><td class="rank num">12</td><td>🇫🇷 Франция</td><td class="bar-cell"><div class="track vol" title="1 455"><div class="fill" style="width:15.5%"></div></div></td><td class="num">1 455</td><td class="num"><b>+83</b></td></tr><tr><td class="rank num">13</td><td>🇷🇺 Россия</td><td class="bar-cell"><div class="track vol" title="1 346"><div class="fill" style="width:14.4%"></div></div></td><td class="num">1 346</td><td class="num"><b>+111</b></td></tr><tr><td class="rank num">14</td><td>🇦🇷 Аргентина</td><td class="bar-cell"><div class="track vol" title="1 225"><div class="fill" style="width:13.1%"></div></div></td><td class="num">1 225</td><td class="num"><b>+3</b></td></tr><tr><td class="rank num">15</td><td>🇬🇧 Великобритания</td><td class="bar-cell"><div class="track vol" title="1 032"><div class="fill" style="width:11.0%"></div></div></td><td class="num">1 032</td><td class="num"><b>+74</b></td></tr><tr><td class="rank num">16</td><td>🇦🇺 Австралия</td><td class="bar-cell"><div class="track vol" title="992"><div class="fill" style="width:10.6%"></div></div></td><td class="num">992</td><td class="num"><b>+17</b></td></tr><tr><td class="rank num">17</td><td>🇨🇱 Чили</td><td class="bar-cell"><div class="track vol" title="905"><div class="fill" style="width:9.7%"></div></div></td><td class="num">905</td><td class="num"><span style="color:var(--muted)">—</span></td></tr><tr><td class="rank num">18</td><td>🇨🇴 Колумбия</td><td class="bar-cell"><div class="track vol" title="837"><div class="fill" style="width:8.9%"></div></div></td><td class="num">837</td><td class="num"><b>+13</b></td></tr><tr><td class="rank num">19</td><td>🇿🇦 Южная Африка</td><td class="bar-cell"><div class="track vol" title="815"><div class="fill" style="width:8.7%"></div></div></td><td class="num">815</td><td class="num"><b>+10</b></td></tr><tr><td class="rank num">20</td><td>🇨🇳 Китай</td><td class="bar-cell"><div class="track vol" title="813"><div class="fill" style="width:8.7%"></div></div></td><td class="num">813</td><td class="num"><b>+120</b></td></tr><tr><td class="rank num">21</td><td>🇪🇸 Испания</td><td class="bar-cell"><div class="track vol" title="661"><div class="fill" style="width:7.1%"></div></div></td><td class="num">661</td><td class="num"><b>+20</b></td></tr><tr><td class="rank num">22</td><td>🇹🇷 Турция</td><td class="bar-cell"><div class="track vol" title="571"><div class="fill" style="width:6.1%"></div></div></td><td class="num">571</td><td class="num"><b>+5</b></td></tr><tr><td class="rank num">23</td><td>🇲🇽 Мексика</td><td class="bar-cell"><div class="track vol" title="487"><div class="fill" style="width:5.2%"></div></div></td><td class="num">487</td><td class="num"><b>+11</b></td></tr><tr><td class="rank num">24</td><td>🇰🇷 Корея</td><td class="bar-cell"><div class="track vol" title="468"><div class="fill" style="width:5.0%"></div></div></td><td class="num">468</td><td class="num"><b>+176</b></td></tr><tr><td class="rank num">25</td><td>🌍 Арабские страны</td><td class="bar-cell"><div class="track vol" title="431"><div class="fill" style="width:4.6%"></div></div></td><td class="num">431</td><td class="num"><b>+14</b></td></tr><tr><td class="rank num">26</td><td>🇮🇹 Италия</td><td class="bar-cell"><div class="track vol" title="409"><div class="fill" style="width:4.4%"></div></div></td><td class="num">409</td><td class="num"><b>+41</b></td></tr><tr><td class="rank num">27</td><td>🇸🇬 Сингапур</td><td class="bar-cell"><div class="track vol" title="409"><div class="fill" style="width:4.4%"></div></div></td><td class="num">409</td><td class="num"><b>+22</b></td></tr><tr><td class="rank num">28</td><td>🇵🇹 Португалия</td><td class="bar-cell"><div class="track vol" title="406"><div class="fill" style="width:4.3%"></div></div></td><td class="num">406</td><td class="num"><b>+8</b></td></tr><tr><td class="rank num">29</td><td>🇵🇰 Пакистан</td><td class="bar-cell"><div class="track vol" title="400"><div class="fill" style="width:4.3%"></div></div></td><td class="num">400</td><td class="num"><b>+2</b></td></tr><tr><td class="rank num">30</td><td>🌏 Другие страны Азии</td><td class="bar-cell"><div class="track vol" title="395"><div class="fill" style="width:4.2%"></div></div></td><td class="num">395</td><td class="num"><b>+24</b></td></tr><tr><td class="rank num">31</td><td>🇲🇾 Малайзия</td><td class="bar-cell"><div class="track vol" title="367"><div class="fill" style="width:3.9%"></div></div></td><td class="num">367</td><td class="num"><b>+4</b></td></tr><tr><td class="rank num">32</td><td>🇵🇪 Перу</td><td class="bar-cell"><div class="track vol" title="348"><div class="fill" style="width:3.7%"></div></div></td><td class="num">348</td><td class="num"><b>+2</b></td></tr><tr><td class="rank num">33</td><td>🌍 Другие страны Африки</td><td class="bar-cell"><div class="track vol" title="324"><div class="fill" style="width:3.5%"></div></div></td><td class="num">324</td><td class="num"><b>+47</b></td></tr><tr><td class="rank num">34</td><td>🌐 СНГ</td><td class="bar-cell"><div class="track vol" title="290"><div class="fill" style="width:3.1%"></div></div></td><td class="num">290</td><td class="num"><b>+18</b></td></tr><tr><td class="rank num">35</td><td>🇹🇭 Таиланд</td><td class="bar-cell"><div class="track vol" title="256"><div class="fill" style="width:2.7%"></div></div></td><td class="num">256</td><td class="num"><b>+19</b></td></tr><tr><td class="rank num">36</td><td>🇪🇨 Эквадор</td><td class="bar-cell"><div class="track vol" title="140"><div class="fill" style="width:1.5%"></div></div></td><td class="num">140</td><td class="num"><span style="color:var(--muted)">—</span></td></tr><tr><td class="rank num">37</td><td>🇺🇾 Уругвай</td><td class="bar-cell"><div class="track vol" title="137"><div class="fill" style="width:1.5%"></div></div></td><td class="num">137</td><td class="num"><b>+8</b></td></tr><tr><td class="rank num">38</td><td>🇵🇭 Филиппины</td><td class="bar-cell"><div class="track vol" title="46"><div class="fill" style="width:0.5%"></div></div></td><td class="num">46</td><td class="num"><b>+1</b></td></tr></tbody>
+  </table>
+</section>
+
+<div class="foot">Обновлено 2026-07-22 02:20 UTC</div>
+</div>
+<script>
+(function(){var k='dash-theme';var s=localStorage.getItem(k);
+if(s)document.documentElement.setAttribute('data-theme',s);
+document.getElementById('tt').addEventListener('click',function(){
+var cur=document.documentElement.getAttribute('data-theme');
+var mq=window.matchMedia('(prefers-color-scheme:dark)').matches;
+var next=(cur? (cur==='dark'?'light':'dark') : (mq?'light':'dark'));
+document.documentElement.setAttribute('data-theme',next);localStorage.setItem(k,next);});})();
+</script>
+</body>
+</html>
