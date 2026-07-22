@@ -1396,6 +1396,77 @@ def cmd_emails(cfg: dict, args) -> None:
         print("Повторите с --apply, чтобы записать (GSA должен быть закрыт).")
 
 
+def cmd_respin(cfg: dict, args) -> None:
+    """Пересобирает данные проектов: РАНДОМИЗИРУЕТ текстовые поля [data_value] шаффлом
+    спинтакса (порядок вариантов в {a|b|c} — уникально на диске, спин сохранён) и генерит
+    свежие почты в [email accounts]. Дублированные проекты перестают быть клонами.
+    Макросы %…%, URL/Keywords и поля без спина не трогаются. Остальное round-trip.
+
+    ⚠ Как --settings/--emails: делать при ЗАКРЫТОМ GSA (иначе затрёт правки при выходе)."""
+    from lib.prj import Prj
+    from lib import spin
+    from lib import emails as em
+
+    do_emails = not getattr(args, "no_emails", False)
+    count = int(args.count or cfg.get("emails_per_project", 20) or 20)
+    provider = cfg.get("email_provider_ini", em.DEFAULT_PROVIDER)
+    domains = as_list(cfg.get("email_domains", [])) or em.DEFAULT_DOMAINS
+    # какие поля рандомизировать: по умолчанию ВСЕ спин-поля [data_value]; можно сузить
+    only_fields = set(as_list(cfg.get("respin_fields", []))) or None
+
+    target_dir = Path(args.dir or cfg.get("gsa_projects_dir", ""))
+    if not target_dir.is_dir():
+        sys.exit(f"Папка с .prj не найдена: {target_dir}")
+    prj_files = sorted(target_dir.glob("*.prj"))
+    if args.only:
+        prj_files = [p for p in prj_files if args.only in p.name]
+    if not prj_files:
+        print(f"В {target_dir} нет .prj (фильтр --only={args.only!r})")
+        return
+
+    mode = "ЗАПИСЬ" if args.apply else "СУХОЙ ПРОГОН (без записи; добавьте --apply)"
+    print(f"── respin: {mode} ──  проектов: {len(prj_files)}; "
+          f"почты: {'да, '+str(count) if do_emails else 'нет'}")
+    if args.apply:
+        print("⚠ Убедитесь, что GSA закрыт — иначе он затрёт правки при выходе.")
+    print("─" * 60)
+
+    done = 0
+    for prj_path in prj_files:
+        try:
+            prj = Prj.load(prj_path)
+        except OSError as exc:
+            print(f"  ✖ {prj_path.name}: не прочитан ({exc})")
+            continue
+        changed = 0
+        for key in prj.list_keys("data_value"):
+            if only_fields and key not in only_fields:
+                continue
+            val = prj.get_value("data_value", key)
+            if val is None or not spin.has_spin(val):
+                continue
+            new = spin.shuffle_spintax(val)
+            if new != val:
+                prj.set_value("data_value", key, new)
+                changed += 1
+        if do_emails:
+            prj.replace_section("email accounts",
+                                em.build_account_lines(count, provider, domains, used=set()))
+        done += 1
+        print(f"  {'+ ' if args.apply else '(dry) '}{prj_path.name}: полей рандомизировано "
+              f"{changed}{'; почты обновлены' if do_emails else ''}")
+        if args.apply:
+            if not args.no_backup:
+                prj_path.with_suffix(".prj.bak").write_bytes(prj_path.read_bytes())
+            prj.save(prj_path)
+
+    print("─" * 60)
+    verb = "пересобрано" if args.apply else "будет пересобрано"
+    print(f"Итог: {verb} проектов {done} из {len(prj_files)}")
+    if not args.apply and done:
+        print("Повторите с --apply, чтобы записать (GSA должен быть закрыт).")
+
+
 def cmd_settings(cfg: dict, args) -> None:
     """Массовая правка настроек в .prj: [Options], [engines] и т.п.
 
@@ -1548,6 +1619,10 @@ def main() -> None:
                     help="обновить [email accounts] в .prj свежими почтами")
     ap.add_argument("--count", type=int, default=0,
                     help="почт на проект (--emails; по умолчанию emails_per_project)")
+    ap.add_argument("--respin", action="store_true",
+                    help="пересобрать проекты: рандомизировать текст (шаффл спинтакса) + почты")
+    ap.add_argument("--no-emails", action="store_true",
+                    help="при --respin не трогать почты (только текст)")
     ap.add_argument("--settings", action="store_true",
                     help="массовая правка настроек .prj ([Options]/[engines])")
     ap.add_argument("--set", action="append", default=[], metavar="СЕКЦИЯ:ключ=значение",
@@ -1602,6 +1677,9 @@ def main() -> None:
         return
     if args.emails:
         cmd_emails(cfg, args)
+        return
+    if args.respin:
+        cmd_respin(cfg, args)
         return
     if args.settings:
         cmd_settings(cfg, args)
