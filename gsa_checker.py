@@ -1375,6 +1375,16 @@ def _snapshot_projects(cfg: dict, prj_files: list, tag: str = "") -> "Path | Non
     return dest
 
 
+def _stamp_notes(prj, text: str) -> None:
+    """Дописывает отметку в поле [Options] notes (через литеральный '\\n', как хранит GSA).
+    Отметка видна в GSA (Modify Project → Notes) — по ней проверяешь, прижилась ли правка:
+    если после перезапуска GSA отметки НЕТ, значит GSA был открыт и откатил .prj. Заодно
+    гарантирует, что содержимое файла меняется — принудительная перезапись."""
+    cur = prj.get_value("Options", "notes") or ""
+    stamp = f"[gsa-checker {time.strftime('%Y-%m-%d %H:%M')}: {text}]"
+    prj.set_value("Options", "notes", (cur + "\\n" + stamp) if cur else stamp)
+
+
 def cmd_backup(cfg: dict, args) -> None:
     """Снимок всех .prj (фильтр --only) в backup_dir — на всякий случай, с историей."""
     if not cfg.get("backup_dir"):
@@ -1436,6 +1446,7 @@ def cmd_emails(cfg: dict, args) -> None:
         done += 1
         print(f"  {'+ ' if args.apply else '(dry) '}{prj_path.name}: почт {old_n} → {count}")
         if args.apply:
+            _stamp_notes(prj, f"emails: {count}")
             if not args.no_backup:
                 prj_path.with_suffix(".prj.bak").write_bytes(prj_path.read_bytes())
             prj.save(prj_path)
@@ -1528,6 +1539,9 @@ def cmd_respin(cfg: dict, args) -> None:
         print(f"  {'+ ' if args.apply else '(dry) '}{prj_path.name}: полей рандомизировано "
               f"{changed}{extra}")
         if args.apply:
+            _stamp_notes(prj, f"respin: текст {changed}"
+                         + (f", почты {count}" if do_emails else "")
+                         + (f", движки {eng_on} on" if keep_engines is not None else ""))
             if not args.no_backup:
                 prj_path.with_suffix(".prj.bak").write_bytes(prj_path.read_bytes())
             prj.save(prj_path)
@@ -1598,13 +1612,17 @@ def cmd_settings(cfg: dict, args) -> None:
             if old != value:
                 shown = "(добавлен)" if old is None else old
                 file_changes.append((section, key, shown, value))
-        if not file_changes:
-            continue
+        if not file_changes and not args.apply:
+            continue                       # в сухом прогоне неизменные пропускаем
         changed_files += 1
-        print(f"  {prj_path.name}")
-        for section, key, old, new in file_changes:
-            print(f"     [{section}] {key}: {old} → {new}")
+        if file_changes:
+            print(f"  {prj_path.name}")
+            for section, key, old, new in file_changes:
+                print(f"     [{section}] {key}: {old} → {new}")
+        else:
+            print(f"  {prj_path.name}: значения уже на месте — форс-перезапись + отметка")
         if args.apply:
+            _stamp_notes(prj, f"settings: правок {len(specs)}, изменено {len(file_changes)}")
             if not args.no_backup:
                 prj_path.with_suffix(".prj.bak").write_bytes(prj_path.read_bytes())
             prj.save(prj_path)

@@ -3,128 +3,333 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Статистика по регионам</title>
+<title>Еженедельная сводка по регионам</title>
 <style>
 :root{
-  --plane:#f9f9f7; --surface:#fcfcfb; --ink:#0b0b0b; --ink2:#52514e;
-  --muted:#898781; --grid:#e1e0d9; --baseline:#c3c2b7; --border:rgba(11,11,11,.10);
-  --blue:#2a78d6; --track:#cde2fb;
-  --good:#0ca30c; --warning:#fab219; --serious:#ec835a; --critical:#d03b3b;
-  --good-ink:#006300;
-  color-scheme:light;
+  --bg:#eef1f3; --surface:#ffffff; --surface-2:#f6f8f9;
+  --ink:#141a21; --muted:#5c6a76; --faint:#8a97a2;
+  --border:#e0e5ea; --hair:#eaeef1;
+  --accent:#0e9f6e; --accent-soft:#d8f0e5;
+  --good:#12946a; --good-bg:#e2f2ea;
+  --warn:#b9791a; --warn-bg:#f6ecd9;
+  --crit:#cc4258; --crit-bg:#f7dfe3;
+  --bar:#0e9f6e; --bar-track:#e6ebee;
+  --shadow:0 1px 2px rgba(20,26,33,.05),0 8px 24px rgba(20,26,33,.05);
 }
 @media (prefers-color-scheme:dark){:root:where(:not([data-theme=light])){
-  --plane:#0d0d0d; --surface:#1a1a19; --ink:#fff; --ink2:#c3c2b7;
-  --muted:#898781; --grid:#2c2c2a; --baseline:#383835; --border:rgba(255,255,255,.10);
-  --blue:#3987e5; --track:#184f95; --good-ink:#0ca30c; color-scheme:dark;
+  --bg:#0c1014; --surface:#141a20; --surface-2:#10151a;
+  --ink:#e9eef3; --muted:#93a1ad; --faint:#66727d;
+  --border:#232c35; --hair:#1c242c;
+  --accent:#2ed69b; --accent-soft:#123528;
+  --good:#38c99a; --good-bg:#12281f; --warn:#d69a3f; --warn-bg:#2b2312;
+  --crit:#e56a7e; --crit-bg:#2c1418; --bar:#2ed69b; --bar-track:#20282f;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
 }}
 :root[data-theme=dark]{
-  --plane:#0d0d0d; --surface:#1a1a19; --ink:#fff; --ink2:#c3c2b7;
-  --muted:#898781; --grid:#2c2c2a; --baseline:#383835; --border:rgba(255,255,255,.10);
-  --blue:#3987e5; --track:#184f95; --good-ink:#0ca30c; color-scheme:dark;
+  --bg:#0c1014; --surface:#141a20; --surface-2:#10151a;
+  --ink:#e9eef3; --muted:#93a1ad; --faint:#66727d;
+  --border:#232c35; --hair:#1c242c;
+  --accent:#2ed69b; --accent-soft:#123528;
+  --good:#38c99a; --good-bg:#12281f; --warn:#d69a3f; --warn-bg:#2b2312;
+  --crit:#e56a7e; --crit-bg:#2c1418; --bar:#2ed69b; --bar-track:#20282f;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
 }
 *{box-sizing:border-box}
-body{margin:0;background:var(--plane);color:var(--ink);
-  font-family:system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.45}
-.wrap{max-width:1100px;margin:0 auto;padding:24px 20px 64px}
-header{display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:8px}
-h1{font-size:20px;margin:0;font-weight:600}
-.sub{color:var(--muted);font-size:13px}
-.theme-btn{margin-left:auto;background:var(--surface);border:1px solid var(--border);
-  color:var(--ink2);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:13px}
-section{background:var(--surface);border:1px solid var(--border);border-radius:12px;
-  padding:18px 20px;margin-top:16px}
-h2{font-size:14px;margin:0 0 14px;font-weight:600;letter-spacing:.01em}
-.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}
-.tile{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px}
-.tile .lbl{color:var(--ink2);font-size:13px;margin-bottom:6px}
-.tile .val{font-size:34px;font-weight:600;letter-spacing:-.01em}
-.tile.hero .val{font-size:52px}
-.tile .val small{font-size:15px;color:var(--muted);font-weight:400}
-.tile .delta{font-size:13px;color:var(--good-ink);margin-top:2px}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--grid);vertical-align:middle}
-th{color:var(--muted);font-weight:500;font-size:12px}
-td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
-.bar-cell{width:46%}
-.track{position:relative;height:12px;background:var(--track);border-radius:4px;overflow:hidden}
-.track.vol{background:var(--grid)}
-td.rank{color:var(--muted);width:34px}
-.fill{position:absolute;left:0;top:0;bottom:0;border-radius:4px 0 0 4px;background:var(--blue)}
-.fill.good{background:var(--good)} .fill.warning{background:var(--warning)}
-.fill.critical{background:var(--critical)}
-.pill{font-size:11px;padding:1px 7px;border-radius:20px;border:1px solid var(--border);color:var(--ink2)}
-.deficit{color:var(--critical);font-variant-numeric:tabular-nums}
-.ok{color:var(--good-ink)}
-.crow{display:flex;align-items:center;gap:10px;padding:3px 0}
-.crow .cn{width:190px;flex:0 0 190px;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.crow .ct{flex:1;height:14px;background:transparent;position:relative}
-.crow .cf{position:absolute;left:0;top:0;bottom:0;background:var(--blue);border-radius:0 4px 4px 0;min-width:2px}
-.crow .cv{width:96px;flex:0 0 96px;text-align:right;font-size:12px;font-variant-numeric:tabular-nums;color:var(--ink2)}
-.crow .cv b{color:var(--good-ink);font-weight:500}
-.foot{color:var(--muted);font-size:12px;margin-top:22px;text-align:center}
-.servers{font-size:13px;color:var(--ink2)}
-.trend{display:flex;align-items:flex-end;gap:14px;height:120px;padding-top:8px}
-.tcol{display:flex;flex-direction:column;align-items:center;gap:6px;flex:0 0 auto}
-.tbar{width:34px;background:var(--blue);border-radius:4px 4px 0 0;min-height:2px}
-.tcap{font-size:11px;color:var(--ink2);font-variant-numeric:tabular-nums}
-.tdate{font-size:11px;color:var(--muted)}
+body{margin:0; background:var(--bg); color:var(--ink);
+  font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  line-height:1.5; -webkit-font-smoothing:antialiased;}
+.num{font-variant-numeric:tabular-nums; font-feature-settings:"tnum" 1;}
+.wrap{max-width:960px; margin:0 auto; padding:28px 20px 56px;}
+header{position:relative;}
+.eyebrow{font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--accent); font-weight:700; margin:0 0 8px;}
+h1{font-size:clamp(24px,4.4vw,34px); line-height:1.1; margin:0 0 6px; text-wrap:balance; letter-spacing:-.01em;}
+.sub{color:var(--muted); font-size:14px; margin:0;}
+.servers{display:flex; flex-wrap:wrap; gap:6px 14px; margin-top:12px; font-size:12.5px; color:var(--muted);}
+.servers b{color:var(--ink); font-weight:600;}
+.dot{color:var(--good); font-weight:700;}
+.theme-btn{position:absolute; top:0; right:0; background:var(--surface); border:1px solid var(--border);
+  color:var(--muted); border-radius:9px; padding:6px 11px; cursor:pointer; font-size:12.5px;}
+.theme-btn:focus-visible,.seg button:focus-visible,th.s:focus-visible{outline:2px solid var(--accent); outline-offset:2px;}
+
+.hero{display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin:22px 0;}
+@media(max-width:640px){.hero{grid-template-columns:1fr;}}
+.tile{background:var(--surface); border:1px solid var(--border); border-radius:14px;
+  padding:16px 16px 15px; box-shadow:var(--shadow); overflow:hidden;}
+.tile .lbl{font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--faint); font-weight:600;}
+.tile .big{font-size:34px; font-weight:750; line-height:1.05; margin-top:6px; letter-spacing:-.02em;}
+.tile .cap{font-size:12.5px; color:var(--muted); margin-top:2px;}
+.tile.accent{background:linear-gradient(160deg,var(--accent-soft),var(--surface)); border-color:var(--accent-soft);}
+.tile.accent .big{color:var(--accent);}
+.tile .big span{font-size:18px; color:var(--muted); font-weight:600;}
+
+.panel{background:var(--surface); border:1px solid var(--border); border-radius:14px;
+  box-shadow:var(--shadow); margin:18px 0; overflow:hidden;}
+.panel-head{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:15px 18px;}
+.panel.collapsible .panel-head{cursor:pointer; user-select:none;}
+.panel-head h2{font-size:15px; margin:0; letter-spacing:-.01em; display:flex; align-items:center; gap:8px;}
+.panel-head .hint{font-size:12px; color:var(--faint);}
+.chev{transition:transform .2s; color:var(--faint); font-size:12px;}
+.panel.collapsed .chev{transform:rotate(-90deg);}
+.panel-body{padding:0 18px 18px;}
+.panel.collapsed .panel-body{display:none;}
+
+.kpi-top{display:flex; align-items:flex-end; justify-content:space-between; gap:10px; flex-wrap:wrap;}
+.kpi-big{font-size:30px; font-weight:750; letter-spacing:-.02em;}
+.kpi-big span{font-size:15px; color:var(--muted); font-weight:600;}
+.kpi-pct{font-size:13px; font-weight:700; color:var(--good); background:var(--good-bg); padding:3px 9px; border-radius:999px;}
+.track{height:12px; background:var(--bar-track); border-radius:999px; margin:12px 0 6px; overflow:hidden; position:relative;}
+.fill{height:100%; background:var(--bar); border-radius:999px; width:0; transition:width .9s cubic-bezier(.2,.7,.2,1);}
+.plan-tick{position:absolute; top:-3px; bottom:-3px; width:2px; background:var(--ink); opacity:.55;}
+.kpi-legend{display:flex; justify-content:space-between; font-size:11.5px; color:var(--muted);}
+.kpi-extra{display:flex; gap:16px; flex-wrap:wrap; margin-top:12px; font-size:13px; color:var(--muted);}
+.kpi-extra b{color:var(--ink);}
+
+.grp-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:8px;}
+.grp{background:var(--surface-2); border:1px solid var(--hair); border-radius:9px; padding:9px 11px; display:flex; flex-direction:column; gap:3px;}
+.grp .g{display:flex; align-items:center; gap:6px; font-size:12px; font-weight:550; color:var(--muted);}
+.grp .g .flag{font-size:13px; width:16px; text-align:center;}
+.grp .r{display:flex; align-items:baseline; justify-content:space-between;}
+.grp .fact{font-size:18px; font-weight:750;}
+.grp.done .fact{color:var(--good);} .grp.miss .fact{color:var(--crit);}
+.grp .st{font-size:11px; font-weight:700;} .grp.done .st{color:var(--good);} .grp.miss .st{color:var(--crit);}
+.grp .tgt{font-size:11.5px; color:var(--faint);}
+
+.seg{display:inline-flex; border:1px solid var(--border); border-radius:8px; overflow:hidden;}
+.seg button{background:var(--surface); border:0; padding:5px 11px; font-size:12px; color:var(--muted); cursor:pointer;}
+.seg button.on{background:var(--accent-soft); color:var(--accent); font-weight:700;}
+
+.tbl-scroll{overflow-x:auto;}
+table{width:100%; border-collapse:collapse; font-size:13.5px; min-width:520px;}
+thead th{text-align:right; font-size:10.5px; letter-spacing:.07em; text-transform:uppercase;
+  color:var(--faint); font-weight:600; padding:10px 10px 9px; border-bottom:1px solid var(--border); white-space:nowrap;}
+thead th.l{text-align:left;}
+thead th.s{cursor:pointer;} thead th.s:hover{color:var(--ink);}
+thead th .ind{opacity:.5; font-weight:700;} thead th.act{color:var(--ink);} thead th.act .ind{opacity:1; color:var(--accent);}
+tbody td{padding:8px 10px; border-bottom:1px solid var(--hair); vertical-align:middle;}
+tbody tr{cursor:pointer;}
+tbody tr:last-child td{border-bottom:none;}
+tbody tr:hover{background:var(--surface-2);}
+tbody tr.sel{background:var(--accent-soft);}
+tbody tr.sel td:first-child{box-shadow:inset 3px 0 0 var(--accent);}
+.geo{display:flex; align-items:center; gap:9px; min-width:190px;}
+.flag{font-size:17px; width:22px; text-align:center; flex:none;}
+.gname{font-weight:550;}
+.chip{font-size:9.5px; letter-spacing:.05em; text-transform:uppercase; font-weight:700; padding:2px 6px; border-radius:5px; margin-left:2px; vertical-align:middle;}
+.chip.tgt{color:var(--accent); background:var(--accent-soft);}
+.chip.non{color:var(--faint); background:var(--surface-2); border:1px solid var(--hair);}
+td.n{text-align:right; white-space:nowrap;}
+.delta{font-weight:700;} .delta.pos{color:var(--good);} .delta.zero{color:var(--faint);}
+.dbar-wrap{min-width:96px;}
+.dbar{display:inline-block; height:7px; border-radius:3px; background:var(--bar); vertical-align:middle; opacity:.85;}
+
+.cmt-form{display:flex; flex-direction:column; gap:8px; margin-bottom:14px;}
+.cmt-row{display:flex; gap:8px; flex-wrap:wrap;}
+.cmt-form input,.cmt-form textarea{background:var(--surface-2); border:1px solid var(--border); border-radius:9px;
+  color:var(--ink); font:inherit; font-size:13px; padding:9px 11px;}
+.cmt-form input{flex:0 0 180px;} .cmt-form textarea{flex:1; min-height:56px; resize:vertical; width:100%;}
+.cmt-form button{align-self:flex-start; background:var(--accent); color:#fff; border:0; border-radius:9px;
+  padding:8px 16px; font-weight:650; font-size:13px; cursor:pointer;}
+.cmt-form button:disabled{opacity:.5; cursor:default;}
+.cmt{border-top:1px solid var(--hair); padding:11px 0; font-size:13.5px;}
+.cmt:first-child{border-top:0;}
+.cmt .meta{font-size:11.5px; color:var(--faint); margin-bottom:3px;}
+.cmt .meta b{color:var(--muted);}
+.cmt .body{white-space:pre-wrap;}
+.cmt-empty{color:var(--faint); font-size:13px; padding:6px 0;}
+.cmt-mode{font-size:11px; color:var(--faint); margin-top:8px;}
+
+.foot{margin-top:24px; display:grid; gap:10px;}
+.note{background:var(--surface); border:1px solid var(--border); border-left:3px solid var(--accent);
+  border-radius:10px; padding:11px 14px; font-size:12.5px; color:var(--muted);}
+.note b{color:var(--ink);}
+.meta-line{font-size:11.5px; color:var(--faint); margin-top:6px; text-align:center;}
 </style>
 </head>
 <body>
 <div class="wrap">
-<header>
-  <div>
-    <h1>Еженедельная статистика по регионам</h1>
-    <div class="sub">Данные за неделю: 2026-07-20 · источники: Источник 1 ✓ (45 мин назад), Источник 2 ✓ (45 мин назад)</div>
+  <header>
+    <button class="theme-btn" id="tt">◐ тема</button>
+    <p class="eyebrow">Еженедельная сводка · регионы</p>
+    <h1>Недельный прирост базы</h1>
+    <p class="sub">Данные за неделю: 2026-07-20 · источников: 2</p>
+    <div class="servers"><span><span class="dot">●</span> Источник 1 ✓ (45 мин назад), Источник 2 ✓ (45 мин назад)</span>
+      <span>Всего в базе: <b class="num">53,042</b></span></div>
+  </header>
+
+  <section class="hero" id="hero"></section>
+
+  <section class="panel collapsible">
+    <div class="panel-head"><h2><span class="chev">▾</span> План недели</h2><span class="hint">прирост / план</span></div>
+    <div class="panel-body" id="kpiPanel"></div>
+  </section>
+
+  <section class="panel collapsible">
+    <div class="panel-head"><h2><span class="chev">▾</span> План по группам</h2><span class="hint">факт / план за неделю</span></div>
+    <div class="panel-body"><div class="grp-grid" id="groups"></div></div>
+  </section>
+
+  <section class="panel collapsible" id="geoTable">
+    <div class="panel-head"><h2><span class="chev">▾</span> Прирост по регионам</h2>
+      <span class="seg" id="geoFilter"><button data-f="all">Все</button><button data-f="tgt">Только цель</button></span></div>
+    <div class="panel-body"><div class="tbl-scroll"><table>
+      <thead><tr>
+        <th class="l s" data-k="geo">Регион <span class="ind"></span></th>
+        <th class="s" data-k="total">Накоплено <span class="ind"></span></th>
+        <th class="s" data-k="delta">Прирост <span class="ind"></span></th>
+        <th class="l">Динамика</th>
+      </tr></thead>
+      <tbody id="geoRows"></tbody>
+    </table></div>
+    <p class="cmt-mode">Клик по заголовку — сортировка · клик по строке — выделение.</p></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Комментарии</h2><span class="hint">заметки команды</span></div>
+    <div class="panel-body">
+      <div class="cmt-form">
+        <div class="cmt-row"><input id="cmtAuthor" type="text" placeholder="Имя (необязательно)" maxlength="40"></div>
+        <textarea id="cmtText" placeholder="Добавить комментарий…" maxlength="2000"></textarea>
+        <button id="cmtBtn">Добавить</button>
+      </div>
+      <div id="cmtList"></div>
+      <div class="cmt-mode" id="cmtMode"></div>
+    </div>
+  </section>
+
+  <div class="foot">
+    <div class="note"><b>Целевые / нецелевые.</b> План считается по 21 группам целевых регионов
+      (план 440). Крупные нецелевые регионы в план не входят, хотя пополняют базу.</div>
+    <div class="meta-line">Обновлено 2026-07-22 02:37 UTC</div>
   </div>
-  <button class="theme-btn" id="tt">◐ тема</button>
-</header>
-
-<div class="tiles">
-  <div class="tile hero"><div class="lbl">Всего в базе</div><div class="val">52 820</div></div>
-  <div class="tile"><div class="lbl">Добавлено за неделю</div><div class="val">1 778</div>
-    <div class="delta">за неделю 2026-07-20</div></div>
-  <div class="tile"><div class="lbl">Выполнение плана (прирост)</div>
-    <div class="val">537 <small>/ 440</small></div>
-    <div class="delta">122% недельного плана</div></div>
-  <div class="tile"><div class="lbl">Источники</div><div class="val" style="font-size:20px;padding-top:10px">
-    <span class="servers">Источник 1 ✓ (45 мин назад), Источник 2 ✓ (45 мин назад)</span></div></div>
 </div>
-
-<section>
-  <h2>Лучшие по приросту за неделю — план (440)</h2>
-  <table>
-    <thead><tr><th>Регион</th><th class="num">прирост / план</th>
-      <th class="bar-cell">выполнение</th><th class="num">недобор</th></tr></thead>
-    <tbody><tr><td>🇨🇱 Чили</td><td class="num">0 / 5</td><td class="bar-cell"><div class="track" title="0/5 (0%)"><div class="fill critical" style="width:0.0%"></div></div></td><td class="num"><span class="deficit">−5</span></td></tr><tr><td>🇪🇨 Эквадор</td><td class="num">0 / 5</td><td class="bar-cell"><div class="track" title="0/5 (0%)"><div class="fill critical" style="width:0.0%"></div></div></td><td class="num"><span class="deficit">−5</span></td></tr><tr><td>🌎 Латам (исп.)</td><td class="num">5 / 75</td><td class="bar-cell"><div class="track" title="5/75 (7%)"><div class="fill critical" style="width:6.7%"></div></div></td><td class="num"><span class="deficit">−70</span></td></tr><tr><td>🇦🇷 Аргентина</td><td class="num">3 / 20</td><td class="bar-cell"><div class="track" title="3/20 (15%)"><div class="fill critical" style="width:15.0%"></div></div></td><td class="num"><span class="deficit">−17</span></td></tr><tr><td>🇵🇪 Перу</td><td class="num">2 / 5</td><td class="bar-cell"><div class="track" title="2/5 (40%)"><div class="fill critical" style="width:40.0%"></div></div></td><td class="num"><span class="deficit">−3</span></td></tr><tr><td>🇹🇷 Турция</td><td class="num">5 / 10</td><td class="bar-cell"><div class="track" title="5/10 (50%)"><div class="fill warning" style="width:50.0%"></div></div></td><td class="num"><span class="deficit">−5</span></td></tr><tr><td>🇻🇳 Вьетнам</td><td class="num">11 / 20</td><td class="bar-cell"><div class="track" title="11/20 (55%)"><div class="fill warning" style="width:55.0%"></div></div></td><td class="num"><span class="deficit">−9</span></td></tr><tr><td>🇧🇷 Бразилия</td><td class="num">23 / 40</td><td class="bar-cell"><div class="track" title="23/40 (57%)"><div class="fill warning" style="width:57.5%"></div></div></td><td class="num"><span class="deficit">−17</span></td></tr><tr><td>🇵🇱 Польша</td><td class="num">32 / 50</td><td class="bar-cell"><div class="track" title="32/50 (64%)"><div class="fill warning" style="width:64.0%"></div></div></td><td class="num"><span class="deficit">−18</span></td></tr><tr><td>🇿🇦 Южная Африка</td><td class="num">10 / 15</td><td class="bar-cell"><div class="track" title="10/15 (67%)"><div class="fill warning" style="width:66.7%"></div></div></td><td class="num"><span class="deficit">−5</span></td></tr><tr><td>🇵🇹 Португалия</td><td class="num">8 / 10</td><td class="bar-cell"><div class="track" title="8/10 (80%)"><div class="fill warning" style="width:80.0%"></div></div></td><td class="num"><span class="deficit">−2</span></td></tr><tr><td>🇨🇴 Колумбия</td><td class="num">13 / 15</td><td class="bar-cell"><div class="track" title="13/15 (87%)"><div class="fill warning" style="width:86.7%"></div></div></td><td class="num"><span class="deficit">−2</span></td></tr><tr><td>🌏 Азия 1 (Индонезия+Малайзия)</td><td class="num">39 / 45</td><td class="bar-cell"><div class="track" title="39/45 (87%)"><div class="fill warning" style="width:86.7%"></div></div></td><td class="num"><span class="deficit">−6</span></td></tr><tr><td>🌊 Океания</td><td class="num">18 / 20</td><td class="bar-cell"><div class="track" title="18/20 (90%)"><div class="fill warning" style="width:90.0%"></div></div></td><td class="num"><span class="deficit">−2</span></td></tr><tr><td>🇺🇾 Уругвай</td><td class="num">8 / 5</td><td class="bar-cell"><div class="track" title="8/5 (160%)"><div class="fill good" style="width:100.0%"></div></div></td><td class="num"><span class="ok">выполнено</span></td></tr><tr><td>🇹🇭 Таиланд</td><td class="num">19 / 10</td><td class="bar-cell"><div class="track" title="19/10 (190%)"><div class="fill good" style="width:100.0%"></div></div></td><td class="num"><span class="ok">выполнено</span></td></tr><tr><td>🇲🇽 Мексика</td><td class="num">11 / 5</td><td class="bar-cell"><div class="track" title="11/5 (220%)"><div class="fill good" style="width:100.0%"></div></div></td><td class="num"><span class="ok">выполнено</span></td></tr><tr><td>🌍 Другие страны Африки</td><td class="num">47 / 20</td><td class="bar-cell"><div class="track" title="47/20 (235%)"><div class="fill good" style="width:100.0%"></div></div></td><td class="num"><span class="ok">выполнено</span></td></tr><tr><td>🇯🇵 Япония</td><td class="num">58 / 20</td><td class="bar-cell"><div class="track" title="58/20 (290%)"><div class="fill good" style="width:100.0%"></div></div></td><td class="num"><span class="ok">выполнено</span></td></tr><tr><td>🇫🇷 Франция</td><td class="num">83 / 20</td><td class="bar-cell"><div class="track" title="83/20 (415%)"><div class="fill good" style="width:100.0%"></div></div></td><td class="num"><span class="ok">выполнено</span></td></tr><tr><td>🌏 Другие страны Азии</td><td class="num">142 / 25</td><td class="bar-cell"><div class="track" title="142/25 (568%)"><div class="fill good" style="width:100.0%"></div></div></td><td class="num"><span class="ok">выполнено</span></td></tr></tbody>
-  </table>
-</section>
-
-<section>
-  <h2>Прирост по неделям</h2>
-  <div class="trend"><div class="tcol"><div class="tcap">+1778</div><div class="tbar" style="height:100%" title="2026-07-20: +1778"></div><div class="tdate">07-20</div></div></div>
-</section>
-
-<section>
-  <h2>Лучшие по объёму базы — топ-40</h2>
-  <table>
-    <thead><tr><th class="num">#</th><th>Регион</th><th class="bar-cell">объём</th>
-      <th class="num">всего в базе</th><th class="num">+ неделя</th></tr></thead>
-    <tbody><tr><td class="rank num">1</td><td>🇺🇸 США</td><td class="bar-cell"><div class="track vol" title="9 363"><div class="fill" style="width:100.0%"></div></div></td><td class="num">9 363</td><td class="num"><b>+387</b></td></tr><tr><td class="rank num">2</td><td>🏳 Не указано</td><td class="bar-cell"><div class="track vol" title="7 653"><div class="fill" style="width:81.7%"></div></div></td><td class="num">7 653</td><td class="num"><b>+15</b></td></tr><tr><td class="rank num">3</td><td>🇪🇺 Другие страны Европы</td><td class="bar-cell"><div class="track vol" title="3 230"><div class="fill" style="width:34.5%"></div></div></td><td class="num">3 230</td><td class="num"><b>+224</b></td></tr><tr><td class="rank num">4</td><td>🇻🇳 Вьетнам</td><td class="bar-cell"><div class="track vol" title="3 033"><div class="fill" style="width:32.4%"></div></div></td><td class="num">3 033</td><td class="num"><b>+11</b></td></tr><tr><td class="rank num">5</td><td>🇵🇱 Польша</td><td class="bar-cell"><div class="track vol" title="2 336"><div class="fill" style="width:24.9%"></div></div></td><td class="num">2 336</td><td class="num"><b>+32</b></td></tr><tr><td class="rank num">6</td><td>🌎 Латинская Америка</td><td class="bar-cell"><div class="track vol" title="2 230"><div class="fill" style="width:23.8%"></div></div></td><td class="num">2 230</td><td class="num"><b>+5</b></td></tr><tr><td class="rank num">7</td><td>🇧🇷 Бразилия</td><td class="bar-cell"><div class="track vol" title="1 932"><div class="fill" style="width:20.6%"></div></div></td><td class="num">1 932</td><td class="num"><b>+23</b></td></tr><tr><td class="rank num">8</td><td>🇮🇳 Индия</td><td class="bar-cell"><div class="track vol" title="1 869"><div class="fill" style="width:20.0%"></div></div></td><td class="num">1 869</td><td class="num"><b>+22</b></td></tr><tr><td class="rank num">9</td><td>🇩🇪 Германия</td><td class="bar-cell"><div class="track vol" title="1 869"><div class="fill" style="width:20.0%"></div></div></td><td class="num">1 869</td><td class="num"><b>+113</b></td></tr><tr><td class="rank num">10</td><td>🇯🇵 Япония</td><td class="bar-cell"><div class="track vol" title="1 793"><div class="fill" style="width:19.1%"></div></div></td><td class="num">1 793</td><td class="num"><b>+58</b></td></tr><tr><td class="rank num">11</td><td>🇮🇩 Индонезия</td><td class="bar-cell"><div class="track vol" title="1 769"><div class="fill" style="width:18.9%"></div></div></td><td class="num">1 769</td><td class="num"><b>+35</b></td></tr><tr><td class="rank num">12</td><td>🇫🇷 Франция</td><td class="bar-cell"><div class="track vol" title="1 455"><div class="fill" style="width:15.5%"></div></div></td><td class="num">1 455</td><td class="num"><b>+83</b></td></tr><tr><td class="rank num">13</td><td>🇷🇺 Россия</td><td class="bar-cell"><div class="track vol" title="1 346"><div class="fill" style="width:14.4%"></div></div></td><td class="num">1 346</td><td class="num"><b>+111</b></td></tr><tr><td class="rank num">14</td><td>🇦🇷 Аргентина</td><td class="bar-cell"><div class="track vol" title="1 225"><div class="fill" style="width:13.1%"></div></div></td><td class="num">1 225</td><td class="num"><b>+3</b></td></tr><tr><td class="rank num">15</td><td>🇬🇧 Великобритания</td><td class="bar-cell"><div class="track vol" title="1 032"><div class="fill" style="width:11.0%"></div></div></td><td class="num">1 032</td><td class="num"><b>+74</b></td></tr><tr><td class="rank num">16</td><td>🇦🇺 Австралия</td><td class="bar-cell"><div class="track vol" title="992"><div class="fill" style="width:10.6%"></div></div></td><td class="num">992</td><td class="num"><b>+17</b></td></tr><tr><td class="rank num">17</td><td>🇨🇱 Чили</td><td class="bar-cell"><div class="track vol" title="905"><div class="fill" style="width:9.7%"></div></div></td><td class="num">905</td><td class="num"><span style="color:var(--muted)">—</span></td></tr><tr><td class="rank num">18</td><td>🇨🇴 Колумбия</td><td class="bar-cell"><div class="track vol" title="837"><div class="fill" style="width:8.9%"></div></div></td><td class="num">837</td><td class="num"><b>+13</b></td></tr><tr><td class="rank num">19</td><td>🇿🇦 Южная Африка</td><td class="bar-cell"><div class="track vol" title="815"><div class="fill" style="width:8.7%"></div></div></td><td class="num">815</td><td class="num"><b>+10</b></td></tr><tr><td class="rank num">20</td><td>🇨🇳 Китай</td><td class="bar-cell"><div class="track vol" title="813"><div class="fill" style="width:8.7%"></div></div></td><td class="num">813</td><td class="num"><b>+120</b></td></tr><tr><td class="rank num">21</td><td>🇪🇸 Испания</td><td class="bar-cell"><div class="track vol" title="661"><div class="fill" style="width:7.1%"></div></div></td><td class="num">661</td><td class="num"><b>+20</b></td></tr><tr><td class="rank num">22</td><td>🇹🇷 Турция</td><td class="bar-cell"><div class="track vol" title="571"><div class="fill" style="width:6.1%"></div></div></td><td class="num">571</td><td class="num"><b>+5</b></td></tr><tr><td class="rank num">23</td><td>🇲🇽 Мексика</td><td class="bar-cell"><div class="track vol" title="487"><div class="fill" style="width:5.2%"></div></div></td><td class="num">487</td><td class="num"><b>+11</b></td></tr><tr><td class="rank num">24</td><td>🇰🇷 Корея</td><td class="bar-cell"><div class="track vol" title="468"><div class="fill" style="width:5.0%"></div></div></td><td class="num">468</td><td class="num"><b>+176</b></td></tr><tr><td class="rank num">25</td><td>🌍 Арабские страны</td><td class="bar-cell"><div class="track vol" title="431"><div class="fill" style="width:4.6%"></div></div></td><td class="num">431</td><td class="num"><b>+14</b></td></tr><tr><td class="rank num">26</td><td>🇮🇹 Италия</td><td class="bar-cell"><div class="track vol" title="409"><div class="fill" style="width:4.4%"></div></div></td><td class="num">409</td><td class="num"><b>+41</b></td></tr><tr><td class="rank num">27</td><td>🇸🇬 Сингапур</td><td class="bar-cell"><div class="track vol" title="409"><div class="fill" style="width:4.4%"></div></div></td><td class="num">409</td><td class="num"><b>+22</b></td></tr><tr><td class="rank num">28</td><td>🇵🇹 Португалия</td><td class="bar-cell"><div class="track vol" title="406"><div class="fill" style="width:4.3%"></div></div></td><td class="num">406</td><td class="num"><b>+8</b></td></tr><tr><td class="rank num">29</td><td>🇵🇰 Пакистан</td><td class="bar-cell"><div class="track vol" title="400"><div class="fill" style="width:4.3%"></div></div></td><td class="num">400</td><td class="num"><b>+2</b></td></tr><tr><td class="rank num">30</td><td>🌏 Другие страны Азии</td><td class="bar-cell"><div class="track vol" title="395"><div class="fill" style="width:4.2%"></div></div></td><td class="num">395</td><td class="num"><b>+24</b></td></tr><tr><td class="rank num">31</td><td>🇲🇾 Малайзия</td><td class="bar-cell"><div class="track vol" title="367"><div class="fill" style="width:3.9%"></div></div></td><td class="num">367</td><td class="num"><b>+4</b></td></tr><tr><td class="rank num">32</td><td>🇵🇪 Перу</td><td class="bar-cell"><div class="track vol" title="348"><div class="fill" style="width:3.7%"></div></div></td><td class="num">348</td><td class="num"><b>+2</b></td></tr><tr><td class="rank num">33</td><td>🌍 Другие страны Африки</td><td class="bar-cell"><div class="track vol" title="324"><div class="fill" style="width:3.5%"></div></div></td><td class="num">324</td><td class="num"><b>+47</b></td></tr><tr><td class="rank num">34</td><td>🌐 СНГ</td><td class="bar-cell"><div class="track vol" title="290"><div class="fill" style="width:3.1%"></div></div></td><td class="num">290</td><td class="num"><b>+18</b></td></tr><tr><td class="rank num">35</td><td>🇹🇭 Таиланд</td><td class="bar-cell"><div class="track vol" title="256"><div class="fill" style="width:2.7%"></div></div></td><td class="num">256</td><td class="num"><b>+19</b></td></tr><tr><td class="rank num">36</td><td>🇪🇨 Эквадор</td><td class="bar-cell"><div class="track vol" title="140"><div class="fill" style="width:1.5%"></div></div></td><td class="num">140</td><td class="num"><span style="color:var(--muted)">—</span></td></tr><tr><td class="rank num">37</td><td>🇺🇾 Уругвай</td><td class="bar-cell"><div class="track vol" title="137"><div class="fill" style="width:1.5%"></div></div></td><td class="num">137</td><td class="num"><b>+8</b></td></tr><tr><td class="rank num">38</td><td>🇵🇭 Филиппины</td><td class="bar-cell"><div class="track vol" title="46"><div class="fill" style="width:0.5%"></div></div></td><td class="num">46</td><td class="num"><b>+1</b></td></tr></tbody>
-  </table>
-</section>
-
-<div class="foot">Обновлено 2026-07-22 02:20 UTC</div>
-</div>
+<script>window.DATA = {"geo": [["🌎", "Латинская Америка", 2230, 5, true], ["🇺🇸", "США", 9363, 387, false], ["🇷🇺", "Россия", 1346, 111, false], ["🇻🇳", "Вьетнам", 3033, 11, true], ["🇵🇹", "Португалия", 406, 8, true], ["🇹🇷", "Турция", 571, 5, true], ["🇬🇧", "Великобритания", 1032, 74, false], ["🇯🇵", "Япония", 1793, 58, true], ["🇮🇳", "Индия", 1869, 22, false], ["🇩🇪", "Германия", 1869, 113, false], ["🇧🇷", "Бразилия", 1932, 23, true], ["🇦🇺", "Австралия", 992, 17, true], ["🇿🇦", "Южная Африка", 815, 10, true], ["🌍", "Арабские страны", 431, 14, false], ["🇫🇷", "Франция", 1455, 83, true], ["🇪🇸", "Испания", 661, 20, false], ["🇪🇺", "Другие страны Европы", 3230, 224, false], ["🇵🇱", "Польша", 2336, 32, true], ["🇮🇩", "Индонезия", 1769, 35, true], ["🇮🇹", "Италия", 409, 41, false], ["🇵🇰", "Пакистан", 400, 2, false], ["🇲🇾", "Малайзия", 367, 4, true], ["🇸🇬", "Сингапур", 409, 22, true], ["🇵🇭", "Филиппины", 46, 1, true], ["🌍", "Другие страны Африки", 324, 47, true], ["🇨🇳", "Китай", 813, 120, true], ["🇨🇴", "Колумбия", 837, 13, true], ["🇨🇱", "Чили", 905, 0, true], ["🇵🇪", "Перу", 348, 2, true], ["🇪🇨", "Эквадор", 140, 0, true], ["🇺🇾", "Уругвай", 137, 8, true], ["🇹🇭", "Таиланд", 256, 19, true], ["🇰🇷", "Корея", 468, 176, false], ["🇲🇽", "Мексика", 487, 11, true], ["🌐", "СНГ", 290, 18, false], ["🇦🇷", "Аргентина", 1225, 3, true], ["🌏", "Другие страны Азии", 395, 24, false], ["🏳", "Не указано", 7653, 15, false]], "groups": [["🌎", "Латам (исп.)", 5, 75], ["🇨🇴", "Колумбия", 13, 15], ["🇨🇱", "Чили", 0, 5], ["🇵🇪", "Перу", 2, 5], ["🇪🇨", "Эквадор", 0, 5], ["🇺🇾", "Уругвай", 8, 5], ["🇲🇽", "Мексика", 11, 5], ["🇦🇷", "Аргентина", 3, 20], ["🇧🇷", "Бразилия", 23, 40], ["🇵🇹", "Португалия", 8, 10], ["🇹🇷", "Турция", 5, 10], ["🇫🇷", "Франция", 83, 20], ["🇵🇱", "Польша", 32, 50], ["🇯🇵", "Япония", 58, 20], ["🇹🇭", "Таиланд", 19, 10], ["🇻🇳", "Вьетнам", 11, 20], ["🌍", "Другие страны Африки", 47, 20], ["🇿🇦", "Южная Африка", 10, 15], ["🌊", "Океания", 18, 20], ["🌏", "Другие страны Азии", 142, 25], ["🌏", "Азия 1 (Индонезия+Малайзия)", 39, 45]], "week": "2026-07-20", "gen": "2026-07-22 02:37 UTC", "totals": {"base": 53042, "added": 1778, "kpi_added": 537, "kpi_target": 440, "groups_closed": 7, "groups_total": 21, "targets": 24}};</script>
 <script>
-(function(){var k='dash-theme';var s=localStorage.getItem(k);
-if(s)document.documentElement.setAttribute('data-theme',s);
-document.getElementById('tt').addEventListener('click',function(){
-var cur=document.documentElement.getAttribute('data-theme');
-var mq=window.matchMedia('(prefers-color-scheme:dark)').matches;
-var next=(cur? (cur==='dark'?'light':'dark') : (mq?'light':'dark'));
-document.documentElement.setAttribute('data-theme',next);localStorage.setItem(k,next);});})();
+const D = window.DATA;
+const $ = s => document.querySelector(s);
+const fnum = n => n.toLocaleString("ru-RU").replace(/ /g," ").replace(/,/g," ");
+const store = { get:(k,d)=>{try{return JSON.parse(localStorage.getItem(k))??d}catch(e){return d}},
+                set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}} };
+
+/* ---- тема ---- */
+(function(){ const k="dash-theme", s=store.get(k,null);
+  if(s) document.documentElement.setAttribute("data-theme",s);
+  $("#tt").addEventListener("click",()=>{ const cur=document.documentElement.getAttribute("data-theme");
+    const mq=matchMedia("(prefers-color-scheme:dark)").matches;
+    const next = cur ? (cur==="dark"?"light":"dark") : (mq?"light":"dark");
+    document.documentElement.setAttribute("data-theme",next); store.set(k,next); }); })();
+
+/* ---- сворачивание секций ---- */
+document.querySelectorAll(".panel.collapsible .panel-head").forEach(h=>{
+  h.addEventListener("click",()=>h.parentElement.classList.toggle("collapsed"));
+});
+
+/* ---- hero + KPI ---- */
+const T = D.totals;
+$("#hero").innerHTML = `
+  <div class="tile accent"><div class="lbl">Прирост за неделю</div>
+    <div class="big num">+${fnum(T.added)}</div><div class="cap">новых записей по всем регионам</div></div>
+  <div class="tile"><div class="lbl">Выполнение плана</div>
+    <div class="big num">${fnum(T.kpi_added)}<span> / ${fnum(T.kpi_target)}</span></div>
+    <div class="cap">${T.kpi_added>=T.kpi_target?("план перевыполнен на "+Math.round((T.kpi_added/T.kpi_target-1)*100)+"%"):(Math.round(T.kpi_added/T.kpi_target*100)+"% плана")}</div></div>
+  <div class="tile"><div class="lbl">Групп в плане</div>
+    <div class="big num">${T.groups_closed}<span> / ${T.groups_total}</span> ${T.groups_closed===T.groups_total?'<span style="color:var(--good);font-size:26px">✓</span>':''}</div>
+    <div class="cap">${T.groups_closed===T.groups_total?"все группы закрыты":(T.groups_total-T.groups_closed)+" не закрыто"}</div></div>`;
+
+const planPct = Math.min(T.kpi_target/Math.max(T.kpi_added,T.kpi_target)*100,100);
+$("#kpiPanel").innerHTML = `
+  <div class="kpi-top"><div class="kpi-big num">${fnum(T.kpi_added)} <span>/ ${fnum(T.kpi_target)} план</span></div>
+    <div class="kpi-pct">${Math.round(T.kpi_added/T.kpi_target*100)}% · ${T.kpi_added>=T.kpi_target?"+":""}${fnum(T.kpi_added-T.kpi_target)}</div></div>
+  <div class="track"><div class="fill" id="kfill"></div><div class="plan-tick" style="left:${planPct.toFixed(0)}%"></div></div>
+  <div class="kpi-legend"><span>0</span><span>план ${fnum(T.kpi_target)}</span><span class="num">факт ${fnum(T.kpi_added)}</span></div>
+  <div class="kpi-extra"><span>Групп закрыто: <b class="num">${T.groups_closed} / ${T.groups_total}</b></span>
+    <span>Целевых регионов: <b class="num">${T.targets}</b></span>
+    <span>${T.kpi_added>=T.kpi_target?"Сверх плана":"Недобор"}: <b class="num">${T.kpi_added>=T.kpi_target?"+":""}${fnum(T.kpi_added-T.kpi_target)}</b></span></div>`;
+requestAnimationFrame(()=>{ const f=$("#kfill");
+  if(matchMedia("(prefers-reduced-motion: reduce)").matches) f.style.transition="none";
+  setTimeout(()=>{ f.style.width="100%"; },60); });
+
+/* ---- KPI по группам ---- */
+$("#groups").innerHTML = D.groups.map(g=>{ const [flag,name,fact,tgt]=g, done=fact>=tgt;
+  return `<div class="grp ${done?'done':'miss'}"><div class="g"><span class="flag">${flag}</span>${name}</div>
+    <div class="r"><span class="fact num">+${fact}</span><span class="st">${done?'✓':fact+'/'+tgt}</span></div>
+    <div class="tgt num">план ${tgt} · ${done?('+'+(fact-tgt)+' сверх'):('−'+(tgt-fact)+' недобор')}</div></div>`;
+}).join("");
+
+/* ---- таблица «прирост по гео»: сортировка + выделение + фильтр ---- */
+let sortKey=store.get("gsort","delta"), sortDir=store.get("gdir",-1);
+let filt=store.get("gfilt","all");
+let sel=new Set(store.get("gsel",[]));
+const cols={geo:1,total:2,delta:3};
+function renderGeo(){
+  let rows=D.geo.slice();
+  if(filt==="tgt") rows=rows.filter(r=>r[4]);
+  const maxD=Math.max(1,...rows.map(r=>r[3]));
+  rows.sort((a,b)=>{ let x,y;
+    if(sortKey==="geo"){x=a[1].toLowerCase();y=b[1].toLowerCase(); return (x<y?-1:x>y?1:0)*sortDir;}
+    x=a[cols[sortKey]]; y=b[cols[sortKey]]; return (x-y)*sortDir; });
+  $("#geoRows").innerHTML = rows.map(r=>{ const [flag,name,total,delta,tgt]=r;
+    const bw=delta>0?Math.max(4,Math.round(delta/maxD*100)):0;
+    const chip=tgt?'<span class="chip tgt">цель</span>':'<span class="chip non">—</span>';
+    return `<tr data-g="${name}" class="${sel.has(name)?'sel':''}">
+      <td><div class="geo"><span class="flag">${flag}</span><span class="gname">${name}</span>${chip}</div></td>
+      <td class="n num">${fnum(total)}</td>
+      <td class="n"><span class="delta ${delta>0?'pos':'zero'}">${delta>0?'+'+delta:'—'}</span></td>
+      <td class="dbar-wrap"><span class="dbar" style="width:${bw}%"></span></td></tr>`; }).join("");
+  document.querySelectorAll("#geoTable th.s").forEach(th=>{
+    const k=th.dataset.k, on=k===sortKey; th.classList.toggle("act",on);
+    th.querySelector(".ind").textContent = on ? (sortDir<0?"▼":"▲") : "";
+  });
+}
+document.querySelectorAll("#geoTable th.s").forEach(th=>{
+  const set=()=>{ const k=th.dataset.k;
+    if(k===sortKey) sortDir=-sortDir; else {sortKey=k; sortDir=(k==="geo"?1:-1);}
+    store.set("gsort",sortKey); store.set("gdir",sortDir); renderGeo(); };
+  th.tabIndex=0; th.addEventListener("click",set);
+  th.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){e.preventDefault();set();} });
+});
+$("#geoRows").addEventListener("click",e=>{ const tr=e.target.closest("tr"); if(!tr)return;
+  const g=tr.dataset.g; if(sel.has(g))sel.delete(g); else sel.add(g);
+  store.set("gsel",[...sel]); tr.classList.toggle("sel"); });
+document.querySelectorAll("#geoFilter button").forEach(b=>b.addEventListener("click",()=>{
+  filt=b.dataset.f; store.set("gfilt",filt);
+  document.querySelectorAll("#geoFilter button").forEach(x=>x.classList.toggle("on",x===b)); renderGeo(); }));
+document.querySelector(`#geoFilter button[data-f="${filt}"]`)?.classList.add("on");
+renderGeo();
+
+/* ---- комментарии (общий KV на бою; localStorage — превью) ---- */
+const CKEY="dash-comments";
+let cmtMode="local";
+async function loadComments(){
+  try{ const r=await fetch("/api/comments",{headers:{"accept":"application/json"}});
+    if(r.ok){ cmtMode="shared"; return await r.json(); } }catch(e){}
+  cmtMode="local"; return store.get(CKEY,[]);
+}
+async function saveComment(c){
+  if(cmtMode==="shared"){ try{ const r=await fetch("/api/comments",{method:"POST",
+      headers:{"content-type":"application/json"},body:JSON.stringify(c)});
+    if(r.ok) return true; }catch(e){} }
+  const arr=store.get(CKEY,[]); arr.push(c); store.set(CKEY,arr); return true;
+}
+function renderComments(list){
+  const box=$("#cmtList");
+  if(!list.length){ box.innerHTML='<div class="cmt-empty">Пока нет комментариев.</div>'; }
+  else box.innerHTML=list.slice().sort((a,b)=>b.ts-a.ts).map(c=>{
+    const d=new Date(c.ts).toLocaleString("ru-RU");
+    return `<div class="cmt"><div class="meta"><b>${esc(c.author||"аноним")}</b> · ${d}</div>
+      <div class="body">${esc(c.text)}</div></div>`; }).join("");
+  $("#cmtMode").textContent = cmtMode==="shared"
+    ? "Общие комментарии (сохраняются на сервере)."
+    : "Превью: комментарии пока хранятся только в этом браузере — на боевом сайте будут общими.";
+}
+function esc(s){ return String(s).replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m])); }
+(async()=>{
+  let list=await loadComments(); renderComments(list);
+  const ta=$("#cmtText"), au=$("#cmtAuthor"), btn=$("#cmtBtn");
+  btn.addEventListener("click",async()=>{ const text=ta.value.trim(); if(!text)return;
+    btn.disabled=true; const c={text,author:au.value.trim()||"аноним",ts:Date.now()};
+    await saveComment(c); ta.value="";
+    list=await loadComments(); renderComments(list); btn.disabled=false; });
+})();
 </script>
 </body>
 </html>
