@@ -1343,6 +1343,55 @@ def cmd_autopilot(cfg: dict, args) -> None:
         _email_reminder(cfg, telegram)
 
 
+def _snapshot_projects(cfg: dict, prj_files: list, tag: str = "") -> "Path | None":
+    """Снимок .prj в backup_dir/<server>_<дата-время>[_tag]/ — история бэкапов на всякий
+    случай (в отличие от .prj.bak, который перезаписывается). Прунит старые снимки до
+    backup_keep. Возвращает путь снимка или None (если backup_dir не задан)."""
+    import shutil
+    root = cfg.get("backup_dir", "")
+    if not root or not prj_files:
+        return None
+    server = str(cfg.get("server_name", "gsa")).strip() or "gsa"
+    name = f"{server}_{time.strftime('%Y-%m-%d_%H%M%S')}" + (f"_{tag}" if tag else "")
+    dest = Path(root) / name
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+        for p in prj_files:
+            shutil.copy2(p, dest / p.name)
+    except OSError as e:
+        print(f"⚠ бэкап не сделан ({dest}): {e}", file=sys.stderr)
+        return None
+    keep = int(cfg.get("backup_keep", 20) or 20)
+    if keep > 0:
+        try:
+            snaps = sorted((d for d in Path(root).iterdir()
+                            if d.is_dir() and d.name.startswith(server + "_")),
+                           key=lambda d: d.stat().st_mtime)
+            for old in snaps[:-keep]:
+                shutil.rmtree(old, ignore_errors=True)
+        except OSError:
+            pass
+    print(f"✓ бэкап {len(prj_files)} проектов → {dest}")
+    return dest
+
+
+def cmd_backup(cfg: dict, args) -> None:
+    """Снимок всех .prj (фильтр --only) в backup_dir — на всякий случай, с историей."""
+    if not cfg.get("backup_dir"):
+        sys.exit("Не задан backup_dir (куда складывать бэкапы проектов).")
+    target_dir = Path(args.dir or cfg.get("gsa_projects_dir", ""))
+    if not target_dir.is_dir():
+        sys.exit(f"Папка с .prj не найдена: {target_dir}")
+    prj_files = sorted(target_dir.glob("*.prj"))
+    if args.only:
+        prj_files = [p for p in prj_files if args.only in p.name]
+    if not prj_files:
+        print(f"В {target_dir} нет .prj (фильтр --only={args.only!r})")
+        return
+    if not _snapshot_projects(cfg, prj_files, tag="manual"):
+        sys.exit("Бэкап не удался.")
+
+
 def cmd_emails(cfg: dict, args) -> None:
     """Обновляет секцию [email accounts] в .prj свежими почтами (уникальный набор на
     проект). Формат нативный для GSA (разделитель 0xFF). Остальное .prj не трогает.
@@ -1372,6 +1421,8 @@ def cmd_emails(cfg: dict, args) -> None:
         print("⚠ Убедитесь, что GSA закрыт — иначе он затрёт правки при выходе.")
     print("─" * 60)
 
+    if args.apply and not args.no_backup:
+        _snapshot_projects(cfg, prj_files, tag="emails")
     done = 0
     for prj_path in prj_files:
         try:
@@ -1440,6 +1491,8 @@ def cmd_respin(cfg: dict, args) -> None:
         print("⚠ Убедитесь, что GSA закрыт — иначе он затрёт правки при выходе.")
     print("─" * 60)
 
+    if args.apply and not args.no_backup:
+        _snapshot_projects(cfg, prj_files, tag="respin")
     done = 0
     for prj_path in prj_files:
         try:
@@ -1530,6 +1583,8 @@ def cmd_settings(cfg: dict, args) -> None:
         print("⚠ Убедитесь, что GSA закрыт — иначе он затрёт правки при выходе.")
     print("─" * 60)
 
+    if args.apply and not args.no_backup:
+        _snapshot_projects(cfg, prj_files, tag="settings")
     changed_files = 0
     for prj_path in prj_files:
         try:
@@ -1638,6 +1693,8 @@ def main() -> None:
                     help="обновить [email accounts] в .prj свежими почтами")
     ap.add_argument("--count", type=int, default=0,
                     help="почт на проект (--emails; по умолчанию emails_per_project)")
+    ap.add_argument("--backup", action="store_true",
+                    help="снимок .prj в backup_dir (с историей, на всякий случай)")
     ap.add_argument("--respin", action="store_true",
                     help="пересобрать проекты: рандомизировать текст (шаффл спинтакса) + почты")
     ap.add_argument("--no-emails", action="store_true",
@@ -1698,6 +1755,9 @@ def main() -> None:
         return
     if args.emails:
         cmd_emails(cfg, args)
+        return
+    if args.backup:
+        cmd_backup(cfg, args)
         return
     if args.respin:
         cmd_respin(cfg, args)
