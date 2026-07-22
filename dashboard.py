@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Генератор статического дашборда статистики GSA для Cloudflare Pages.
+"""Генератор дашборда статистики (обезличенного) для Cloudflare Pages.
 
 Читает те же данные, что и `--report`:
-  - бакеты verified (buckets_dir/*.txt)  -> тоталы по странам/регионам
-  - отчёты gsa_report_*_YYYY-MM-DD.txt   -> прибавка за неделю + тренд + статус серверов
-  - kpi_targets из конфига               -> выполнение KPI (по ПРИБАВКЕ за неделю)
+  - бакеты (buckets_dir/*.txt)          -> накопленный объём по регионам
+  - отчёты gsa_report_*_YYYY-MM-DD.txt  -> прирост за неделю + статус источников
+  - kpi_targets из конфига              -> выполнение плана (по приросту за неделю)
 
-Отдаёт self-contained site/index.html (без внешних зависимостей) — готово к
-публикации на Cloudflare Pages. Палитра — валидированный референс dataviz-скилла.
+Отдаёт site/index.html — интерактивный дашборд (сортировка, сворачивание, выделение
+строк, фильтр, комментарии). Комментарии/пароль на бою обслуживает _worker.js + KV;
+без бэкенда комментарии живут в localStorage (превью). Числа считаются вживую.
 
   python3 dashboard.py            # -> ./site/index.html
-  python3 dashboard.py --out DIR  # другой каталог публикации
 """
 import argparse, html, json, re, sys
 from datetime import datetime, timezone
@@ -44,7 +44,7 @@ def load_config() -> dict:
 
 
 def bucket_totals(buckets_dir: Path) -> dict:
-    """file -> число непустых строк (накопленный verified)."""
+    """file -> число непустых строк (накопленный объём)."""
     out = {}
     for fname, _label in B.SUMMARY_ORDER:
         out[fname] = B.count_nonempty_lines(buckets_dir / fname)
@@ -53,8 +53,7 @@ def bucket_totals(buckets_dir: Path) -> dict:
 
 
 def parse_report(path: Path) -> dict:
-    """Разбирает один gsa_report_*.txt -> {date, added_total, itogo, servers,
-    per_file:{file:(total,added)}}."""
+    """Разбирает один отчёт -> {date, added_total, itogo, servers, per_file:{file:(total,added)}}."""
     m = DATE_RE.search(path.name)
     date = m.group(1) if m else "?"
     res = {"date": date, "path": path, "added_total": 0, "itogo": 0,
@@ -98,103 +97,9 @@ def compute_kpi(kpi_targets: list, latest: dict) -> list:
     for kt in kpi_targets:
         added = sum(added_by_file.get(f, 0) for f in kt["buckets"])
         target = kt["target"]
-        pct = (added / target) if target else 0.0
-        if added >= target:
-            status = "good"
-        elif pct >= 0.5:
-            status = "warning"
-        else:
-            status = "critical"
         rows.append({"label": kt["label"], "target": target, "added": added,
-                     "buckets": kt["buckets"], "pct": pct,
-                     "deficit": max(target - added, 0), "status": status})
+                     "buckets": kt["buckets"], "deficit": max(target - added, 0)})
     return rows
-
-
-# ---------- рендер ----------
-
-CSS = """
-:root{
-  --plane:#f9f9f7; --surface:#fcfcfb; --ink:#0b0b0b; --ink2:#52514e;
-  --muted:#898781; --grid:#e1e0d9; --baseline:#c3c2b7; --border:rgba(11,11,11,.10);
-  --blue:#2a78d6; --track:#cde2fb;
-  --good:#0ca30c; --warning:#fab219; --serious:#ec835a; --critical:#d03b3b;
-  --good-ink:#006300;
-  color-scheme:light;
-}
-@media (prefers-color-scheme:dark){:root:where(:not([data-theme=light])){
-  --plane:#0d0d0d; --surface:#1a1a19; --ink:#fff; --ink2:#c3c2b7;
-  --muted:#898781; --grid:#2c2c2a; --baseline:#383835; --border:rgba(255,255,255,.10);
-  --blue:#3987e5; --track:#184f95; --good-ink:#0ca30c; color-scheme:dark;
-}}
-:root[data-theme=dark]{
-  --plane:#0d0d0d; --surface:#1a1a19; --ink:#fff; --ink2:#c3c2b7;
-  --muted:#898781; --grid:#2c2c2a; --baseline:#383835; --border:rgba(255,255,255,.10);
-  --blue:#3987e5; --track:#184f95; --good-ink:#0ca30c; color-scheme:dark;
-}
-*{box-sizing:border-box}
-body{margin:0;background:var(--plane);color:var(--ink);
-  font-family:system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.45}
-.wrap{max-width:1100px;margin:0 auto;padding:24px 20px 64px}
-header{display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:8px}
-h1{font-size:20px;margin:0;font-weight:600}
-.sub{color:var(--muted);font-size:13px}
-.theme-btn{margin-left:auto;background:var(--surface);border:1px solid var(--border);
-  color:var(--ink2);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:13px}
-section{background:var(--surface);border:1px solid var(--border);border-radius:12px;
-  padding:18px 20px;margin-top:16px}
-h2{font-size:14px;margin:0 0 14px;font-weight:600;letter-spacing:.01em}
-.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}
-.tile{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px}
-.tile .lbl{color:var(--ink2);font-size:13px;margin-bottom:6px}
-.tile .val{font-size:34px;font-weight:600;letter-spacing:-.01em}
-.tile.hero .val{font-size:52px}
-.tile .val small{font-size:15px;color:var(--muted);font-weight:400}
-.tile .delta{font-size:13px;color:var(--good-ink);margin-top:2px}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--grid);vertical-align:middle}
-th{color:var(--muted);font-weight:500;font-size:12px}
-td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
-.bar-cell{width:46%}
-.track{position:relative;height:12px;background:var(--track);border-radius:4px;overflow:hidden}
-.track.vol{background:var(--grid)}
-td.rank{color:var(--muted);width:34px}
-.fill{position:absolute;left:0;top:0;bottom:0;border-radius:4px 0 0 4px;background:var(--blue)}
-.fill.good{background:var(--good)} .fill.warning{background:var(--warning)}
-.fill.critical{background:var(--critical)}
-.pill{font-size:11px;padding:1px 7px;border-radius:20px;border:1px solid var(--border);color:var(--ink2)}
-.deficit{color:var(--critical);font-variant-numeric:tabular-nums}
-.ok{color:var(--good-ink)}
-.crow{display:flex;align-items:center;gap:10px;padding:3px 0}
-.crow .cn{width:190px;flex:0 0 190px;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.crow .ct{flex:1;height:14px;background:transparent;position:relative}
-.crow .cf{position:absolute;left:0;top:0;bottom:0;background:var(--blue);border-radius:0 4px 4px 0;min-width:2px}
-.crow .cv{width:96px;flex:0 0 96px;text-align:right;font-size:12px;font-variant-numeric:tabular-nums;color:var(--ink2)}
-.crow .cv b{color:var(--good-ink);font-weight:500}
-.foot{color:var(--muted);font-size:12px;margin-top:22px;text-align:center}
-.servers{font-size:13px;color:var(--ink2)}
-.trend{display:flex;align-items:flex-end;gap:14px;height:120px;padding-top:8px}
-.tcol{display:flex;flex-direction:column;align-items:center;gap:6px;flex:0 0 auto}
-.tbar{width:34px;background:var(--blue);border-radius:4px 4px 0 0;min-height:2px}
-.tcap{font-size:11px;color:var(--ink2);font-variant-numeric:tabular-nums}
-.tdate{font-size:11px;color:var(--muted)}
-"""
-
-THEME_JS = """
-(function(){var k='dash-theme';var s=localStorage.getItem(k);
-if(s)document.documentElement.setAttribute('data-theme',s);
-document.getElementById('tt').addEventListener('click',function(){
-var cur=document.documentElement.getAttribute('data-theme');
-var mq=window.matchMedia('(prefers-color-scheme:dark)').matches;
-var next=(cur? (cur==='dark'?'light':'dark') : (mq?'light':'dark'));
-document.documentElement.setAttribute('data-theme',next);localStorage.setItem(k,next);});})();
-"""
-
-
-def fmt(n): return f"{n:,}".replace(",", " ")
-
-
-def esc(s): return html.escape(str(s))
 
 
 def generic_servers(s: str) -> str:
@@ -208,115 +113,392 @@ def generic_servers(s: str) -> str:
     return re.sub(r"gsa-\w+", repl, s)
 
 
+def split_label(label: str):
+    """'🇺🇸 США' -> ('🇺🇸', 'США')."""
+    parts = label.split(" ", 1)
+    return (parts[0], parts[1]) if len(parts) == 2 else ("", label)
+
+
+def esc(s):
+    return html.escape(str(s))
+
+
+# ---------- дизайн (палитра оператора) ----------
+
+CSS = r"""
+:root{
+  --bg:#eef1f3; --surface:#ffffff; --surface-2:#f6f8f9;
+  --ink:#141a21; --muted:#5c6a76; --faint:#8a97a2;
+  --border:#e0e5ea; --hair:#eaeef1;
+  --accent:#0e9f6e; --accent-soft:#d8f0e5;
+  --good:#12946a; --good-bg:#e2f2ea;
+  --warn:#b9791a; --warn-bg:#f6ecd9;
+  --crit:#cc4258; --crit-bg:#f7dfe3;
+  --bar:#0e9f6e; --bar-track:#e6ebee;
+  --shadow:0 1px 2px rgba(20,26,33,.05),0 8px 24px rgba(20,26,33,.05);
+}
+@media (prefers-color-scheme:dark){:root:where(:not([data-theme=light])){
+  --bg:#0c1014; --surface:#141a20; --surface-2:#10151a;
+  --ink:#e9eef3; --muted:#93a1ad; --faint:#66727d;
+  --border:#232c35; --hair:#1c242c;
+  --accent:#2ed69b; --accent-soft:#123528;
+  --good:#38c99a; --good-bg:#12281f; --warn:#d69a3f; --warn-bg:#2b2312;
+  --crit:#e56a7e; --crit-bg:#2c1418; --bar:#2ed69b; --bar-track:#20282f;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
+}}
+:root[data-theme=dark]{
+  --bg:#0c1014; --surface:#141a20; --surface-2:#10151a;
+  --ink:#e9eef3; --muted:#93a1ad; --faint:#66727d;
+  --border:#232c35; --hair:#1c242c;
+  --accent:#2ed69b; --accent-soft:#123528;
+  --good:#38c99a; --good-bg:#12281f; --warn:#d69a3f; --warn-bg:#2b2312;
+  --crit:#e56a7e; --crit-bg:#2c1418; --bar:#2ed69b; --bar-track:#20282f;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box}
+body{margin:0; background:var(--bg); color:var(--ink);
+  font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  line-height:1.5; -webkit-font-smoothing:antialiased;}
+.num{font-variant-numeric:tabular-nums; font-feature-settings:"tnum" 1;}
+.wrap{max-width:960px; margin:0 auto; padding:28px 20px 56px;}
+header{position:relative;}
+.eyebrow{font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--accent); font-weight:700; margin:0 0 8px;}
+h1{font-size:clamp(24px,4.4vw,34px); line-height:1.1; margin:0 0 6px; text-wrap:balance; letter-spacing:-.01em;}
+.sub{color:var(--muted); font-size:14px; margin:0;}
+.servers{display:flex; flex-wrap:wrap; gap:6px 14px; margin-top:12px; font-size:12.5px; color:var(--muted);}
+.servers b{color:var(--ink); font-weight:600;}
+.dot{color:var(--good); font-weight:700;}
+.theme-btn{position:absolute; top:0; right:0; background:var(--surface); border:1px solid var(--border);
+  color:var(--muted); border-radius:9px; padding:6px 11px; cursor:pointer; font-size:12.5px;}
+.theme-btn:focus-visible,.seg button:focus-visible,th.s:focus-visible{outline:2px solid var(--accent); outline-offset:2px;}
+
+.hero{display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin:22px 0;}
+@media(max-width:640px){.hero{grid-template-columns:1fr;}}
+.tile{background:var(--surface); border:1px solid var(--border); border-radius:14px;
+  padding:16px 16px 15px; box-shadow:var(--shadow); overflow:hidden;}
+.tile .lbl{font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--faint); font-weight:600;}
+.tile .big{font-size:34px; font-weight:750; line-height:1.05; margin-top:6px; letter-spacing:-.02em;}
+.tile .cap{font-size:12.5px; color:var(--muted); margin-top:2px;}
+.tile.accent{background:linear-gradient(160deg,var(--accent-soft),var(--surface)); border-color:var(--accent-soft);}
+.tile.accent .big{color:var(--accent);}
+.tile .big span{font-size:18px; color:var(--muted); font-weight:600;}
+
+.panel{background:var(--surface); border:1px solid var(--border); border-radius:14px;
+  box-shadow:var(--shadow); margin:18px 0; overflow:hidden;}
+.panel-head{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:15px 18px;}
+.panel.collapsible .panel-head{cursor:pointer; user-select:none;}
+.panel-head h2{font-size:15px; margin:0; letter-spacing:-.01em; display:flex; align-items:center; gap:8px;}
+.panel-head .hint{font-size:12px; color:var(--faint);}
+.chev{transition:transform .2s; color:var(--faint); font-size:12px;}
+.panel.collapsed .chev{transform:rotate(-90deg);}
+.panel-body{padding:0 18px 18px;}
+.panel.collapsed .panel-body{display:none;}
+
+.kpi-top{display:flex; align-items:flex-end; justify-content:space-between; gap:10px; flex-wrap:wrap;}
+.kpi-big{font-size:30px; font-weight:750; letter-spacing:-.02em;}
+.kpi-big span{font-size:15px; color:var(--muted); font-weight:600;}
+.kpi-pct{font-size:13px; font-weight:700; color:var(--good); background:var(--good-bg); padding:3px 9px; border-radius:999px;}
+.track{height:12px; background:var(--bar-track); border-radius:999px; margin:12px 0 6px; overflow:hidden; position:relative;}
+.fill{height:100%; background:var(--bar); border-radius:999px; width:0; transition:width .9s cubic-bezier(.2,.7,.2,1);}
+.plan-tick{position:absolute; top:-3px; bottom:-3px; width:2px; background:var(--ink); opacity:.55;}
+.kpi-legend{display:flex; justify-content:space-between; font-size:11.5px; color:var(--muted);}
+.kpi-extra{display:flex; gap:16px; flex-wrap:wrap; margin-top:12px; font-size:13px; color:var(--muted);}
+.kpi-extra b{color:var(--ink);}
+
+.grp-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:8px;}
+.grp{background:var(--surface-2); border:1px solid var(--hair); border-radius:9px; padding:9px 11px; display:flex; flex-direction:column; gap:3px;}
+.grp .g{display:flex; align-items:center; gap:6px; font-size:12px; font-weight:550; color:var(--muted);}
+.grp .g .flag{font-size:13px; width:16px; text-align:center;}
+.grp .r{display:flex; align-items:baseline; justify-content:space-between;}
+.grp .fact{font-size:18px; font-weight:750;}
+.grp.done .fact{color:var(--good);} .grp.miss .fact{color:var(--crit);}
+.grp .st{font-size:11px; font-weight:700;} .grp.done .st{color:var(--good);} .grp.miss .st{color:var(--crit);}
+.grp .tgt{font-size:11.5px; color:var(--faint);}
+
+.seg{display:inline-flex; border:1px solid var(--border); border-radius:8px; overflow:hidden;}
+.seg button{background:var(--surface); border:0; padding:5px 11px; font-size:12px; color:var(--muted); cursor:pointer;}
+.seg button.on{background:var(--accent-soft); color:var(--accent); font-weight:700;}
+
+.tbl-scroll{overflow-x:auto;}
+table{width:100%; border-collapse:collapse; font-size:13.5px; min-width:520px;}
+thead th{text-align:right; font-size:10.5px; letter-spacing:.07em; text-transform:uppercase;
+  color:var(--faint); font-weight:600; padding:10px 10px 9px; border-bottom:1px solid var(--border); white-space:nowrap;}
+thead th.l{text-align:left;}
+thead th.s{cursor:pointer;} thead th.s:hover{color:var(--ink);}
+thead th .ind{opacity:.5; font-weight:700;} thead th.act{color:var(--ink);} thead th.act .ind{opacity:1; color:var(--accent);}
+tbody td{padding:8px 10px; border-bottom:1px solid var(--hair); vertical-align:middle;}
+tbody tr{cursor:pointer;}
+tbody tr:last-child td{border-bottom:none;}
+tbody tr:hover{background:var(--surface-2);}
+tbody tr.sel{background:var(--accent-soft);}
+tbody tr.sel td:first-child{box-shadow:inset 3px 0 0 var(--accent);}
+.geo{display:flex; align-items:center; gap:9px; min-width:190px;}
+.flag{font-size:17px; width:22px; text-align:center; flex:none;}
+.gname{font-weight:550;}
+.chip{font-size:9.5px; letter-spacing:.05em; text-transform:uppercase; font-weight:700; padding:2px 6px; border-radius:5px; margin-left:2px; vertical-align:middle;}
+.chip.tgt{color:var(--accent); background:var(--accent-soft);}
+.chip.non{color:var(--faint); background:var(--surface-2); border:1px solid var(--hair);}
+td.n{text-align:right; white-space:nowrap;}
+.delta{font-weight:700;} .delta.pos{color:var(--good);} .delta.zero{color:var(--faint);}
+.dbar-wrap{min-width:96px;}
+.dbar{display:inline-block; height:7px; border-radius:3px; background:var(--bar); vertical-align:middle; opacity:.85;}
+
+.cmt-form{display:flex; flex-direction:column; gap:8px; margin-bottom:14px;}
+.cmt-row{display:flex; gap:8px; flex-wrap:wrap;}
+.cmt-form input,.cmt-form textarea{background:var(--surface-2); border:1px solid var(--border); border-radius:9px;
+  color:var(--ink); font:inherit; font-size:13px; padding:9px 11px;}
+.cmt-form input{flex:0 0 180px;} .cmt-form textarea{flex:1; min-height:56px; resize:vertical; width:100%;}
+.cmt-form button{align-self:flex-start; background:var(--accent); color:#fff; border:0; border-radius:9px;
+  padding:8px 16px; font-weight:650; font-size:13px; cursor:pointer;}
+.cmt-form button:disabled{opacity:.5; cursor:default;}
+.cmt{border-top:1px solid var(--hair); padding:11px 0; font-size:13.5px;}
+.cmt:first-child{border-top:0;}
+.cmt .meta{font-size:11.5px; color:var(--faint); margin-bottom:3px;}
+.cmt .meta b{color:var(--muted);}
+.cmt .body{white-space:pre-wrap;}
+.cmt-empty{color:var(--faint); font-size:13px; padding:6px 0;}
+.cmt-mode{font-size:11px; color:var(--faint); margin-top:8px;}
+
+.foot{margin-top:24px; display:grid; gap:10px;}
+.note{background:var(--surface); border:1px solid var(--border); border-left:3px solid var(--accent);
+  border-radius:10px; padding:11px 14px; font-size:12.5px; color:var(--muted);}
+.note b{color:var(--ink);}
+.meta-line{font-size:11.5px; color:var(--faint); margin-top:6px; text-align:center;}
+"""
+
+APP_JS = r"""
+const D = window.DATA;
+const $ = s => document.querySelector(s);
+const fnum = n => n.toLocaleString("ru-RU").replace(/ /g," ").replace(/,/g," ");
+const store = { get:(k,d)=>{try{return JSON.parse(localStorage.getItem(k))??d}catch(e){return d}},
+                set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}} };
+
+/* ---- тема ---- */
+(function(){ const k="dash-theme", s=store.get(k,null);
+  if(s) document.documentElement.setAttribute("data-theme",s);
+  $("#tt").addEventListener("click",()=>{ const cur=document.documentElement.getAttribute("data-theme");
+    const mq=matchMedia("(prefers-color-scheme:dark)").matches;
+    const next = cur ? (cur==="dark"?"light":"dark") : (mq?"light":"dark");
+    document.documentElement.setAttribute("data-theme",next); store.set(k,next); }); })();
+
+/* ---- сворачивание секций ---- */
+document.querySelectorAll(".panel.collapsible .panel-head").forEach(h=>{
+  h.addEventListener("click",()=>h.parentElement.classList.toggle("collapsed"));
+});
+
+/* ---- hero + KPI ---- */
+const T = D.totals;
+$("#hero").innerHTML = `
+  <div class="tile accent"><div class="lbl">Прирост за неделю</div>
+    <div class="big num">+${fnum(T.added)}</div><div class="cap">новых записей по всем регионам</div></div>
+  <div class="tile"><div class="lbl">Выполнение плана</div>
+    <div class="big num">${fnum(T.kpi_added)}<span> / ${fnum(T.kpi_target)}</span></div>
+    <div class="cap">${T.kpi_added>=T.kpi_target?("план перевыполнен на "+Math.round((T.kpi_added/T.kpi_target-1)*100)+"%"):(Math.round(T.kpi_added/T.kpi_target*100)+"% плана")}</div></div>
+  <div class="tile"><div class="lbl">Групп в плане</div>
+    <div class="big num">${T.groups_closed}<span> / ${T.groups_total}</span> ${T.groups_closed===T.groups_total?'<span style="color:var(--good);font-size:26px">✓</span>':''}</div>
+    <div class="cap">${T.groups_closed===T.groups_total?"все группы закрыты":(T.groups_total-T.groups_closed)+" не закрыто"}</div></div>`;
+
+const planPct = Math.min(T.kpi_target/Math.max(T.kpi_added,T.kpi_target)*100,100);
+$("#kpiPanel").innerHTML = `
+  <div class="kpi-top"><div class="kpi-big num">${fnum(T.kpi_added)} <span>/ ${fnum(T.kpi_target)} план</span></div>
+    <div class="kpi-pct">${Math.round(T.kpi_added/T.kpi_target*100)}% · ${T.kpi_added>=T.kpi_target?"+":""}${fnum(T.kpi_added-T.kpi_target)}</div></div>
+  <div class="track"><div class="fill" id="kfill"></div><div class="plan-tick" style="left:${planPct.toFixed(0)}%"></div></div>
+  <div class="kpi-legend"><span>0</span><span>план ${fnum(T.kpi_target)}</span><span class="num">факт ${fnum(T.kpi_added)}</span></div>
+  <div class="kpi-extra"><span>Групп закрыто: <b class="num">${T.groups_closed} / ${T.groups_total}</b></span>
+    <span>Целевых регионов: <b class="num">${T.targets}</b></span>
+    <span>${T.kpi_added>=T.kpi_target?"Сверх плана":"Недобор"}: <b class="num">${T.kpi_added>=T.kpi_target?"+":""}${fnum(T.kpi_added-T.kpi_target)}</b></span></div>`;
+requestAnimationFrame(()=>{ const f=$("#kfill");
+  if(matchMedia("(prefers-reduced-motion: reduce)").matches) f.style.transition="none";
+  setTimeout(()=>{ f.style.width="100%"; },60); });
+
+/* ---- KPI по группам ---- */
+$("#groups").innerHTML = D.groups.map(g=>{ const [flag,name,fact,tgt]=g, done=fact>=tgt;
+  return `<div class="grp ${done?'done':'miss'}"><div class="g"><span class="flag">${flag}</span>${name}</div>
+    <div class="r"><span class="fact num">+${fact}</span><span class="st">${done?'✓':fact+'/'+tgt}</span></div>
+    <div class="tgt num">план ${tgt} · ${done?('+'+(fact-tgt)+' сверх'):('−'+(tgt-fact)+' недобор')}</div></div>`;
+}).join("");
+
+/* ---- таблица «прирост по гео»: сортировка + выделение + фильтр ---- */
+let sortKey=store.get("gsort","delta"), sortDir=store.get("gdir",-1);
+let filt=store.get("gfilt","all");
+let sel=new Set(store.get("gsel",[]));
+const cols={geo:1,total:2,delta:3};
+function renderGeo(){
+  let rows=D.geo.slice();
+  if(filt==="tgt") rows=rows.filter(r=>r[4]);
+  const maxD=Math.max(1,...rows.map(r=>r[3]));
+  rows.sort((a,b)=>{ let x,y;
+    if(sortKey==="geo"){x=a[1].toLowerCase();y=b[1].toLowerCase(); return (x<y?-1:x>y?1:0)*sortDir;}
+    x=a[cols[sortKey]]; y=b[cols[sortKey]]; return (x-y)*sortDir; });
+  $("#geoRows").innerHTML = rows.map(r=>{ const [flag,name,total,delta,tgt]=r;
+    const bw=delta>0?Math.max(4,Math.round(delta/maxD*100)):0;
+    const chip=tgt?'<span class="chip tgt">цель</span>':'<span class="chip non">—</span>';
+    return `<tr data-g="${name}" class="${sel.has(name)?'sel':''}">
+      <td><div class="geo"><span class="flag">${flag}</span><span class="gname">${name}</span>${chip}</div></td>
+      <td class="n num">${fnum(total)}</td>
+      <td class="n"><span class="delta ${delta>0?'pos':'zero'}">${delta>0?'+'+delta:'—'}</span></td>
+      <td class="dbar-wrap"><span class="dbar" style="width:${bw}%"></span></td></tr>`; }).join("");
+  document.querySelectorAll("#geoTable th.s").forEach(th=>{
+    const k=th.dataset.k, on=k===sortKey; th.classList.toggle("act",on);
+    th.querySelector(".ind").textContent = on ? (sortDir<0?"▼":"▲") : "";
+  });
+}
+document.querySelectorAll("#geoTable th.s").forEach(th=>{
+  const set=()=>{ const k=th.dataset.k;
+    if(k===sortKey) sortDir=-sortDir; else {sortKey=k; sortDir=(k==="geo"?1:-1);}
+    store.set("gsort",sortKey); store.set("gdir",sortDir); renderGeo(); };
+  th.tabIndex=0; th.addEventListener("click",set);
+  th.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){e.preventDefault();set();} });
+});
+$("#geoRows").addEventListener("click",e=>{ const tr=e.target.closest("tr"); if(!tr)return;
+  const g=tr.dataset.g; if(sel.has(g))sel.delete(g); else sel.add(g);
+  store.set("gsel",[...sel]); tr.classList.toggle("sel"); });
+document.querySelectorAll("#geoFilter button").forEach(b=>b.addEventListener("click",()=>{
+  filt=b.dataset.f; store.set("gfilt",filt);
+  document.querySelectorAll("#geoFilter button").forEach(x=>x.classList.toggle("on",x===b)); renderGeo(); }));
+document.querySelector(`#geoFilter button[data-f="${filt}"]`)?.classList.add("on");
+renderGeo();
+
+/* ---- комментарии (общий KV на бою; localStorage — превью) ---- */
+const CKEY="dash-comments";
+let cmtMode="local";
+async function loadComments(){
+  try{ const r=await fetch("/api/comments",{headers:{"accept":"application/json"}});
+    if(r.ok){ cmtMode="shared"; return await r.json(); } }catch(e){}
+  cmtMode="local"; return store.get(CKEY,[]);
+}
+async function saveComment(c){
+  if(cmtMode==="shared"){ try{ const r=await fetch("/api/comments",{method:"POST",
+      headers:{"content-type":"application/json"},body:JSON.stringify(c)});
+    if(r.ok) return true; }catch(e){} }
+  const arr=store.get(CKEY,[]); arr.push(c); store.set(CKEY,arr); return true;
+}
+function renderComments(list){
+  const box=$("#cmtList");
+  if(!list.length){ box.innerHTML='<div class="cmt-empty">Пока нет комментариев.</div>'; }
+  else box.innerHTML=list.slice().sort((a,b)=>b.ts-a.ts).map(c=>{
+    const d=new Date(c.ts).toLocaleString("ru-RU");
+    return `<div class="cmt"><div class="meta"><b>${esc(c.author||"аноним")}</b> · ${d}</div>
+      <div class="body">${esc(c.text)}</div></div>`; }).join("");
+  $("#cmtMode").textContent = cmtMode==="shared"
+    ? "Общие комментарии (сохраняются на сервере)."
+    : "Превью: комментарии пока хранятся только в этом браузере — на боевом сайте будут общими.";
+}
+function esc(s){ return String(s).replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m])); }
+(async()=>{
+  let list=await loadComments(); renderComments(list);
+  const ta=$("#cmtText"), au=$("#cmtAuthor"), btn=$("#cmtBtn");
+  btn.addEventListener("click",async()=>{ const text=ta.value.trim(); if(!text)return;
+    btn.disabled=true; const c={text,author:au.value.trim()||"аноним",ts:Date.now()};
+    await saveComment(c); ta.value="";
+    list=await loadComments(); renderComments(list); btn.disabled=false; });
+})();
+"""
+
+
 def render_html(cfg, totals, reports):
     latest = reports[-1] if reports else None
     kpi = compute_kpi(cfg.get("kpi_targets", []), latest)
     kpi_added = sum(r["added"] for r in kpi)
     kpi_target = sum(r["target"] for r in kpi)
-    kpi_pct = (kpi_added / kpi_target) if kpi_target else 0
-    itogo = latest["itogo"] if latest else sum(totals.values())
+    total = sum(totals.values())  # живая сумма бакетов
     added_week = latest["added_total"] if latest else 0
-    servers = generic_servers(latest["servers"]) if latest else "—"
     week_date = latest["date"] if latest else "—"
+    servers = generic_servers(latest["servers"]) if latest else "—"
     added_by_file = {f: a for f, (t, a) in (latest or {}).get("per_file", {}).items()}
+    kpi_files = {f for kt in cfg.get("kpi_targets", []) for f in kt["buckets"]}
 
-    # KPI meters
-    kpi_rows = []
-    for r in sorted(kpi, key=lambda x: x["pct"]):
-        w = min(r["pct"], 1.0) * 100
-        defc = (f'<span class="ok">выполнено</span>' if r["deficit"] == 0
-                else f'<span class="deficit">−{r["deficit"]}</span>')
-        kpi_rows.append(
-            f'<tr><td>{esc(r["label"])}</td>'
-            f'<td class="num">{r["added"]} / {r["target"]}</td>'
-            f'<td class="bar-cell"><div class="track" title="{r["added"]}/{r["target"]} '
-            f'({r["pct"]*100:.0f}%)"><div class="fill {r["status"]}" style="width:{w:.1f}%"></div></div></td>'
-            f'<td class="num">{defc}</td></tr>')
-
-    # Топ по объёму базы (таблица, сортировка по объёму, топ-40)
-    order = [(f, l) for f, l in B.SUMMARY_ORDER] + [(B.NOT_STATED_FILE, "🏳 Не указано")]
-    rows = sorted(order, key=lambda fl: totals.get(fl[0], 0), reverse=True)[:40]
-    mx = max((totals.get(f, 0) for f, _ in rows), default=1) or 1
-    vol_rows = []
-    for i, (f, l) in enumerate(rows, 1):
-        v = totals.get(f, 0)
-        a = added_by_file.get(f, 0)
-        addtxt = f'<b>+{a}</b>' if a else '<span style="color:var(--muted)">—</span>'
-        vol_rows.append(
-            f'<tr><td class="rank num">{i}</td><td>{esc(l)}</td>'
-            f'<td class="bar-cell"><div class="track vol" title="{fmt(v)}">'
-            f'<div class="fill" style="width:{v/mx*100:.1f}%"></div></div></td>'
-            f'<td class="num">{fmt(v)}</td><td class="num">{addtxt}</td></tr>')
-
-    # Weekly trend (added per report)
-    tmax = max((r["added_total"] for r in reports), default=1) or 1
-    tcols = []
-    for r in reports[-12:]:
-        h = max(r["added_total"] / tmax * 100, 2)
-        tcols.append(
-            f'<div class="tcol"><div class="tcap">+{r["added_total"]}</div>'
-            f'<div class="tbar" style="height:{h:.0f}%" title="{r["date"]}: +{r["added_total"]}"></div>'
-            f'<div class="tdate">{esc(r["date"][5:])}</div></div>')
-    trend_html = ('<div class="trend">' + "".join(tcols) + '</div>') if tcols else \
-        '<p class="sub">Отчётов пока нет — появятся после первого <code>--report</code>.</p>'
+    geo = []
+    for fname, label in list(B.SUMMARY_ORDER) + [(B.NOT_STATED_FILE, "🏳 Не указано")]:
+        flag, name = split_label(label)
+        geo.append([flag, name, totals.get(fname, 0), added_by_file.get(fname, 0),
+                    fname in kpi_files])
+    groups = []
+    for r in kpi:
+        flag, name = split_label(r["label"])
+        groups.append([flag, name, r["added"], r["target"]])
 
     gen = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M %Z")
+    data = {
+        "geo": geo, "groups": groups, "week": week_date, "gen": gen,
+        "totals": {
+            "base": total, "added": added_week,
+            "kpi_added": kpi_added, "kpi_target": kpi_target,
+            "groups_closed": sum(1 for r in kpi if r["added"] >= r["target"]),
+            "groups_total": len(kpi),
+            "targets": sum(1 for g in geo if g[4]),
+        },
+    }
+    data_json = json.dumps(data, ensure_ascii=False)
+    n_src = len([x for x in servers.split(",") if "Источник" in x]) or "—"
 
     return f"""<!doctype html>
 <html lang="ru">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Статистика по регионам</title>
+<title>Еженедельная сводка по регионам</title>
 <style>{CSS}</style>
 </head>
 <body>
 <div class="wrap">
-<header>
-  <div>
-    <h1>Еженедельная статистика по регионам</h1>
-    <div class="sub">Данные за неделю: {esc(week_date)} · источники: {esc(servers)}</div>
+  <header>
+    <button class="theme-btn" id="tt">◐ тема</button>
+    <p class="eyebrow">Еженедельная сводка · регионы</p>
+    <h1>Недельный прирост базы</h1>
+    <p class="sub">Данные за неделю: {esc(week_date)} · источников: {esc(n_src)}</p>
+    <div class="servers"><span><span class="dot">●</span> {esc(servers)}</span>
+      <span>Всего в базе: <b class="num">{total:,}</b></span></div>
+  </header>
+
+  <section class="hero" id="hero"></section>
+
+  <section class="panel collapsible">
+    <div class="panel-head"><h2><span class="chev">▾</span> План недели</h2><span class="hint">прирост / план</span></div>
+    <div class="panel-body" id="kpiPanel"></div>
+  </section>
+
+  <section class="panel collapsible">
+    <div class="panel-head"><h2><span class="chev">▾</span> План по группам</h2><span class="hint">факт / план за неделю</span></div>
+    <div class="panel-body"><div class="grp-grid" id="groups"></div></div>
+  </section>
+
+  <section class="panel collapsible" id="geoTable">
+    <div class="panel-head"><h2><span class="chev">▾</span> Прирост по регионам</h2>
+      <span class="seg" id="geoFilter"><button data-f="all">Все</button><button data-f="tgt">Только цель</button></span></div>
+    <div class="panel-body"><div class="tbl-scroll"><table>
+      <thead><tr>
+        <th class="l s" data-k="geo">Регион <span class="ind"></span></th>
+        <th class="s" data-k="total">Накоплено <span class="ind"></span></th>
+        <th class="s" data-k="delta">Прирост <span class="ind"></span></th>
+        <th class="l">Динамика</th>
+      </tr></thead>
+      <tbody id="geoRows"></tbody>
+    </table></div>
+    <p class="cmt-mode">Клик по заголовку — сортировка · клик по строке — выделение.</p></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Комментарии</h2><span class="hint">заметки команды</span></div>
+    <div class="panel-body">
+      <div class="cmt-form">
+        <div class="cmt-row"><input id="cmtAuthor" type="text" placeholder="Имя (необязательно)" maxlength="40"></div>
+        <textarea id="cmtText" placeholder="Добавить комментарий…" maxlength="2000"></textarea>
+        <button id="cmtBtn">Добавить</button>
+      </div>
+      <div id="cmtList"></div>
+      <div class="cmt-mode" id="cmtMode"></div>
+    </div>
+  </section>
+
+  <div class="foot">
+    <div class="note"><b>Целевые / нецелевые.</b> План считается по {len(kpi)} группам целевых регионов
+      (план {kpi_target}). Крупные нецелевые регионы в план не входят, хотя пополняют базу.</div>
+    <div class="meta-line">Обновлено {esc(gen)}</div>
   </div>
-  <button class="theme-btn" id="tt">◐ тема</button>
-</header>
-
-<div class="tiles">
-  <div class="tile hero"><div class="lbl">Всего в базе</div><div class="val">{fmt(itogo)}</div></div>
-  <div class="tile"><div class="lbl">Добавлено за неделю</div><div class="val">{fmt(added_week)}</div>
-    <div class="delta">за неделю {esc(week_date)}</div></div>
-  <div class="tile"><div class="lbl">Выполнение плана (прирост)</div>
-    <div class="val">{kpi_added} <small>/ {kpi_target}</small></div>
-    <div class="delta">{kpi_pct*100:.0f}% недельного плана</div></div>
-  <div class="tile"><div class="lbl">Источники</div><div class="val" style="font-size:20px;padding-top:10px">
-    <span class="servers">{esc(servers)}</span></div></div>
 </div>
-
-<section>
-  <h2>Лучшие по приросту за неделю — план ({kpi_target})</h2>
-  <table>
-    <thead><tr><th>Регион</th><th class="num">прирост / план</th>
-      <th class="bar-cell">выполнение</th><th class="num">недобор</th></tr></thead>
-    <tbody>{''.join(kpi_rows)}</tbody>
-  </table>
-</section>
-
-<section>
-  <h2>Прирост по неделям</h2>
-  {trend_html}
-</section>
-
-<section>
-  <h2>Лучшие по объёму базы — топ-40</h2>
-  <table>
-    <thead><tr><th class="num">#</th><th>Регион</th><th class="bar-cell">объём</th>
-      <th class="num">всего в базе</th><th class="num">+ неделя</th></tr></thead>
-    <tbody>{''.join(vol_rows)}</tbody>
-  </table>
-</section>
-
-<div class="foot">Обновлено {esc(gen)}</div>
-</div>
-<script>{THEME_JS}</script>
+<script>window.DATA = {data_json};</script>
+<script>{APP_JS}</script>
 </body>
 </html>
 """
@@ -324,8 +506,7 @@ def render_html(cfg, totals, reports):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=str(ROOT / "site"),
-                    help="каталог публикации (по умолчанию ./site)")
+    ap.add_argument("--out", default=str(ROOT / "site"))
     args = ap.parse_args()
     cfg = load_config()
     buckets_dir = Path(cfg["buckets_dir"])
@@ -335,8 +516,8 @@ def main():
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "index.html").write_text(render_html(cfg, totals, reports), encoding="utf-8")
-    print(f"OK: {out_dir/'index.html'}  "
-          f"(бакетов: {sum(1 for v in totals.values() if v)}, отчётов: {len(reports)})")
+    print(f"OK: {out_dir/'index.html'}  (регионов: {len(totals)}, отчётов: {len(reports)}, "
+          f"сумма базы: {sum(totals.values())})")
 
 
 if __name__ == "__main__":
