@@ -1413,6 +1413,14 @@ def cmd_respin(cfg: dict, args) -> None:
     domains = as_list(cfg.get("email_domains", [])) or em.DEFAULT_DOMAINS
     # какие поля рандомизировать: по умолчанию ВСЕ спин-поля [data_value]; можно сузить
     only_fields = set(as_list(cfg.get("respin_fields", []))) or None
+    # белый список движков: если задан keep_engines_file — включаем только их, остальные off
+    keep_engines = None
+    kef = cfg.get("keep_engines_file", "")
+    if kef and Path(kef).is_file() and not getattr(args, "no_engines", False):
+        keep_engines = {ln.strip() for ln in Path(kef).read_text(encoding="utf-8").splitlines()
+                        if ln.strip() and not ln.lstrip().startswith("#")}
+        if not keep_engines:
+            keep_engines = None
 
     target_dir = Path(args.dir or cfg.get("gsa_projects_dir", ""))
     if not target_dir.is_dir():
@@ -1426,7 +1434,8 @@ def cmd_respin(cfg: dict, args) -> None:
 
     mode = "ЗАПИСЬ" if args.apply else "СУХОЙ ПРОГОН (без записи; добавьте --apply)"
     print(f"── respin: {mode} ──  проектов: {len(prj_files)}; "
-          f"почты: {'да, '+str(count) if do_emails else 'нет'}")
+          f"почты: {'да, '+str(count) if do_emails else 'нет'}; "
+          f"движки: {'whitelist '+str(len(keep_engines)) if keep_engines else 'не трогаем'}")
     if args.apply:
         print("⚠ Убедитесь, что GSA закрыт — иначе он затрёт правки при выходе.")
     print("─" * 60)
@@ -1452,9 +1461,19 @@ def cmd_respin(cfg: dict, args) -> None:
         if do_emails:
             prj.replace_section("email accounts",
                                 em.build_account_lines(count, provider, domains, used=set()))
+        eng_on = eng_off = 0
+        if keep_engines is not None:
+            for key in prj.list_keys("engines"):
+                want = "1" if key in keep_engines else "0"
+                if prj.get_value("engines", key) != want:
+                    prj.set_value("engines", key, want)
+                eng_on += want == "1"
+                eng_off += want == "0"
         done += 1
+        extra = "; почты обновлены" if do_emails else ""
+        extra += f"; движки {eng_on} on / {eng_off} off" if keep_engines is not None else ""
         print(f"  {'+ ' if args.apply else '(dry) '}{prj_path.name}: полей рандомизировано "
-              f"{changed}{'; почты обновлены' if do_emails else ''}")
+              f"{changed}{extra}")
         if args.apply:
             if not args.no_backup:
                 prj_path.with_suffix(".prj.bak").write_bytes(prj_path.read_bytes())
@@ -1623,6 +1642,8 @@ def main() -> None:
                     help="пересобрать проекты: рандомизировать текст (шаффл спинтакса) + почты")
     ap.add_argument("--no-emails", action="store_true",
                     help="при --respin не трогать почты (только текст)")
+    ap.add_argument("--no-engines", action="store_true",
+                    help="при --respin не применять whitelist движков (keep_engines_file)")
     ap.add_argument("--settings", action="store_true",
                     help="массовая правка настроек .prj ([Options]/[engines])")
     ap.add_argument("--set", action="append", default=[], metavar="СЕКЦИЯ:ключ=значение",
