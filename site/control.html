@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Control · gsa-checker</title>
+<style>
+  :root{--bg:#0e1116;--card:#161b22;--edge:#242c37;--fg:#e6edf3;--mut:#8b98a8;
+        --ok:#2ea043;--warn:#d29922;--err:#da3633;--acc:#388bfd;--danger:#f85149}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:14px/1.45 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  header{display:flex;align-items:center;gap:12px;padding:12px 18px;
+         border-bottom:1px solid var(--edge);position:sticky;top:0;background:var(--bg);z-index:5}
+  header h1{font-size:15px;margin:0;font-weight:600}
+  header .sp{flex:1}
+  .badge{font-size:12px;color:var(--mut)}
+  button{font:inherit;color:var(--fg);background:var(--card);border:1px solid var(--edge);
+         border-radius:7px;padding:6px 11px;cursor:pointer}
+  button:hover{border-color:var(--acc)}
+  button.danger{border-color:#5a1f22;color:#ffb4ab}
+  button.danger:hover{border-color:var(--danger)}
+  button:disabled{opacity:.5;cursor:default}
+  main{padding:18px;max-width:1100px;margin:0 auto}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+  .node{background:var(--card);border:1px solid var(--edge);border-radius:11px;padding:14px}
+  .node h2{margin:0 0 6px;font-size:14px;display:flex;align-items:center;gap:8px}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--mut)}
+  .dot.ok{background:var(--ok)} .dot.err{background:var(--err)}
+  .kv{color:var(--mut);font-size:12.5px;margin:2px 0}
+  .kv b{color:var(--fg);font-weight:600}
+  .acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+  .acts button{padding:5px 9px;font-size:12.5px}
+  .section-title{color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:.05em;
+                 margin:22px 0 10px}
+  .jobs{display:flex;flex-direction:column;gap:10px}
+  .job{background:var(--card);border:1px solid var(--edge);border-radius:9px;padding:10px 12px}
+  .job .head{display:flex;gap:10px;align-items:center;font-size:12.5px}
+  .tag{font-size:11px;padding:1px 7px;border-radius:20px;border:1px solid var(--edge);color:var(--mut)}
+  .tag.run{color:var(--warn);border-color:#4a3a12}
+  .tag.done0{color:var(--ok);border-color:#153d21}
+  .tag.donex{color:var(--err);border-color:#4a1518}
+  pre{margin:8px 0 0;background:#0b0e13;border:1px solid var(--edge);border-radius:7px;
+      padding:9px;overflow:auto;max-height:220px;font-size:12px;color:#c9d3de;white-space:pre-wrap}
+  .empty{color:var(--mut);padding:14px}
+  #err{color:#ffb4ab;font-size:13px;padding:10px 0}
+</style>
+</head>
+<body>
+<header>
+  <h1>🕹 gsa-checker · Control</h1>
+  <span class="sp"></span>
+  <span class="badge" id="conn">…</span>
+  <button id="refresh">Обновить</button>
+</header>
+<main>
+  <div id="err" hidden></div>
+  <div class="section-title">Ноды</div>
+  <div class="grid" id="nodes"><div class="empty">Загрузка…</div></div>
+  <div class="section-title">Задания</div>
+  <div class="jobs" id="jobs"><div class="empty">Пока пусто — запусти действие на ноде.</div></div>
+</main>
+
+<script>
+"use strict";
+// Панель НЕ хранит токенов: она ходит на same-origin прокси /ctl/*, а Worker
+// подставляет orchestrator_token и требует роль master. См. docs/control-panel.md.
+const API = "/ctl";
+
+// действия: id → {метка, mutating?}. mutating требуют подтверждения.
+const ACTIONS = [
+  {id:"report-dry",    label:"Отчёт (dry)"},
+  {id:"report",        label:"Отчёт (боевой)",     mutating:true},
+  {id:"autopilot-dry", label:"Автопилот (dry)"},
+  {id:"autopilot",     label:"Автопилот (--apply)", mutating:true},
+  {id:"collect",       label:"Собрать .success"},
+  {id:"backup",        label:"Бэкап"},
+];
+
+const $ = s => document.querySelector(s);
+const el = (t,c,txt) => { const e=document.createElement(t); if(c)e.className=c;
+  if(txt!=null)e.textContent=txt; return e; };
+const jobs = [];               // {node, id, action, status, rc, tail}
+
+async function api(path, opts){
+  const r = await fetch(API+path, Object.assign({headers:{"Content-Type":"application/json"}}, opts||{}));
+  if(r.status===401){ throw new Error("Нужен вход под ролью master (401)."); }
+  if(!r.ok){ throw new Error("Ошибка "+r.status); }
+  return r.json();
+}
+
+function ago(ts){ if(!ts) return "—"; const s=Math.floor(Date.now()/1000)-ts;
+  if(s<3600) return (s/60|0)+" мин назад"; if(s<86400) return (s/3600).toFixed(1)+" ч назад";
+  return (s/86400).toFixed(1)+" дн назад"; }
+
+async function loadStatus(){
+  try{
+    const st = await api("/status");
+    $("#conn").textContent = "связь ✓";
+    const box = $("#nodes"); box.innerHTML = "";
+    const names = Object.keys(st).sort();
+    if(!names.length){ box.appendChild(el("div","empty","Нет нод в реестре.")); return; }
+    for(const name of names){
+      const s = st[name] || {};
+      const card = el("div","node");
+      const h = el("h2"); const dot = el("span","dot "+(s.error?"err":"ok"));
+      h.append(dot, document.createTextNode(name));
+      card.appendChild(h);
+      if(s.error){ card.appendChild(el("div","kv","⚠ "+s.error)); }
+      else{
+        const la = s.last_autopilot;
+        card.appendChild(kv("Забор (посл.)", la ? (la.urls?.toLocaleString?.()||la.urls)+" URL" : "—"));
+        if(la) card.appendChild(kv("Когда", ago(la.ts)));
+        card.appendChild(kv("Активных заданий", s.jobs_running ?? 0));
+      }
+      const acts = el("div","acts");
+      for(const a of ACTIONS){
+        const b = el("button", a.mutating?"danger":"", a.label);
+        b.onclick = () => run(name, a);
+        if(s.error) b.disabled = true;
+        acts.appendChild(b);
+      }
+      card.appendChild(acts);
+      box.appendChild(card);
+    }
+  }catch(e){ showErr(e.message); $("#conn").textContent="нет связи"; }
+}
+function kv(k,v){ const d=el("div","kv"); d.innerHTML="<b>"+k+":</b> "; d.append(document.createTextNode(v)); return d; }
+
+async function run(node, action){
+  if(action.mutating && !confirm(`Выполнить «${action.label}» на ноде ${node}?\nЭто боевое действие.`))
+    return;
+  try{
+    const res = await api("/run", {method:"POST",
+      body: JSON.stringify({target:node, action:action.id})});
+    const r = res[node] || res;
+    if(r && r.job_id){ trackJob(node, r.job_id, action.label); }
+    else showErr("Не удалось запустить: "+JSON.stringify(r));
+  }catch(e){ showErr(e.message); }
+}
+
+function trackJob(node, id, label){
+  const job = {node, id, action:label, status:"running", rc:null, tail:""};
+  jobs.unshift(job); renderJobs();
+  const poll = async () => {
+    try{
+      const j = await api(`/job/${encodeURIComponent(node)}/${encodeURIComponent(id)}`);
+      job.status = j.status; job.rc = j.rc; job.tail = j.tail || "";
+      renderJobs();
+      if(j.status !== "done") setTimeout(poll, 2500);
+      else loadStatus();
+    }catch(e){ job.status="error"; job.tail=e.message; renderJobs(); }
+  };
+  setTimeout(poll, 1200);
+}
+
+function renderJobs(){
+  const box = $("#jobs"); box.innerHTML="";
+  if(!jobs.length){ box.appendChild(el("div","empty","Пока пусто.")); return; }
+  for(const j of jobs.slice(0,20)){
+    const d = el("div","job");
+    const head = el("div","head");
+    let cls="run", txt=j.status;
+    if(j.status==="done"){ cls = j.rc===0?"done0":"donex"; txt = j.rc===0?"готово (rc 0)":"ошибка (rc "+j.rc+")"; }
+    head.append(el("span","tag "+cls, txt),
+                el("b",null,j.node), document.createTextNode(" · "+j.action));
+    d.appendChild(head);
+    if(j.tail){ const p=el("pre"); p.textContent=j.tail; d.appendChild(p); }
+    box.appendChild(d);
+  }
+}
+
+function showErr(m){ const e=$("#err"); e.hidden=false; e.textContent="⚠ "+m; }
+
+$("#refresh").onclick = loadStatus;
+loadStatus();
+setInterval(loadStatus, 30000);   // мягкий автообновление статуса
+</script>
+</body>
+</html>
