@@ -278,7 +278,6 @@ def refresh(cfg, log) -> bool:
     Координаты строки — `ui_row_offset`. Возвращает True, если шаг 1 отправлен."""
     _require_pywinauto()
     import time
-    from pywinauto import mouse
     delay = float(cfg.get("ui_menu_delay", 0.5) or 0.5)
     pause = float(cfg.get("ui_key_pause", 0.25) or 0.25)   # пауза между клавишами:
     #   критично, чтобы подменю успело раскрыться до {DOWN}/{ENTER}

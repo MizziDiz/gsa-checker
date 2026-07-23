@@ -74,9 +74,9 @@ def cookie_of(path: Path, addr: str, user: str, host: str):
     закомментированную `;`), подставляем плейсхолдеры. Напр. generator.email:
     `surl=%emailhost%/%emailuser%` — без неё инбокс не отдаётся."""
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        l = line.strip().lstrip(";").strip()
-        if l.lower().startswith("set cookies="):
-            return make_url(l.split("=", 1)[1].strip(), addr, user, host)
+        stripped = line.strip().lstrip(";").strip()
+        if stripped.lower().startswith("set cookies="):
+            return make_url(stripped.split("=", 1)[1].strip(), addr, user, host)
     return None
 
 

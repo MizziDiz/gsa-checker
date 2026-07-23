@@ -73,11 +73,11 @@ def country_name_by_ip(ip: str, db_path: str, cache: dict) -> str:
         return ""
     name = ""
     try:
-        rec = reader.get(ip)
+        rec = reader.get(ip)                 # ValueError — если ip не парсится как адрес
         if rec:
             c = rec.get("country") or rec.get("registered_country") or {}
             name = (c.get("names") or {}).get("en", "") or ""
-    except Exception:
+    except (ValueError, KeyError):
         name = ""
     cache[ip] = name
     return name
@@ -93,16 +93,16 @@ def country_iso(host: str, db_path: str, cache: dict, timeout: float = 3.0) -> s
         return ""
     try:
         socket.setdefaulttimeout(timeout)
-        ip = socket.gethostbyname(host)
-    except Exception:
+        ip = socket.gethostbyname(host)      # OSError (gaierror/timeout) — если DNS не резолвит
+    except OSError:
         cache[host] = ""
         return ""
     code = ""
     try:
-        rec = reader.get(ip)
+        rec = reader.get(ip)                 # ValueError — если ip не парсится
         if rec:
             code = (rec.get("country") or rec.get("registered_country") or {}).get("iso_code", "") or ""
-    except Exception:
+    except (ValueError, KeyError):
         code = ""
     cache[host] = code
     return code

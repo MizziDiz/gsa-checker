@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import logging
 import re
 import sys
 import time
@@ -100,7 +101,6 @@ def count_lines(path: Path) -> int:
     \\r\\n подряд) не учитываются — GSA иногда оставляет хвостовой перевод.
     """
     total = 0
-    trailing_nonempty = False
     with path.open("rb") as fh:
         prev_newline = True  # начало файла — как будто после перевода строки
         while True:
@@ -110,14 +110,12 @@ def count_lines(path: Path) -> int:
             for byte in chunk:
                 if byte == 0x0A:  # \n
                     prev_newline = True
-                    trailing_nonempty = False
                 elif byte == 0x0D:  # \r — игнорируем как разделитель
                     continue
                 else:
                     if prev_newline:
                         total += 1
                         prev_newline = False
-                    trailing_nonempty = True
     return total
 
 
@@ -276,7 +274,8 @@ def cmd_geocheck(cfg: dict, args) -> None:
     agree = disagree = recovered = geo_miss = both_none = 0
     mism = Counter()
     with src.open(encoding="utf-8-sig", newline="") as fh:
-        sample = fh.read(8192); fh.seek(0)
+        sample = fh.read(8192)
+        fh.seek(0)
         try:
             delim = csv.Sniffer().sniff(sample, delimiters=",;\t").delimiter
         except csv.Error:
@@ -479,7 +478,7 @@ def _collection_status(cfg: dict):
         if not sub.is_dir():
             continue
         marker = sub / "_collected.txt"
-        ts = when = None
+        ts = None
         if marker.exists():
             ts = marker.stat().st_mtime
         else:
@@ -681,9 +680,7 @@ def cmd_ui_export(cfg: dict, args) -> None:
     """Выгружает verified-CSV из GSA через UI (--ui-export) в папку report_input, чтобы
     его сразу подхватил --report. Если задан и --report — сразу считает статистику по
     свежему файлу (замыкает цикл выгрузка → раскладка по бакетам → Telegram)."""
-    import logging
     from lib import ui
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
     log = logging.getLogger("gsa_checker")
 
     base = Path(cfg.get("report_input") or cfg.get("report_out_dir") or DATA_DIR)
@@ -1239,8 +1236,6 @@ def _distribute(cfg, projects_dir, eligible, selected, ext, apply, total_bytes, 
     selected = batches
     # один рефреш GSA в конце
     try:
-        import logging
-        logging.basicConfig(level=logging.INFO, format="%(message)s")
         from lib import ui
         ui.refresh(cfg, logging.getLogger("gsa_checker"))
     except SystemExit:
@@ -1663,6 +1658,8 @@ def _force_utf8_output() -> None:
 def main() -> None:
     _force_utf8_output()
     ap = argparse.ArgumentParser(description="GSA SER checker")
+    ap.add_argument("-v", "--verbose", action="store_true",
+                    help="подробный лог (DEBUG) для операционных сообщений")
     ap.add_argument("--remaining", action="store_true",
                     help="остаток целей по проектам")
     ap.add_argument("--json", action="store_true", help="вывод в JSON")
@@ -1731,6 +1728,10 @@ def main() -> None:
     ap.add_argument("--no-backup", action="store_true",
                     help="не делать .prj.bak при --apply")
     args = ap.parse_args()
+    # Единая настройка логирования (операционные/диагностические сообщения — через logging;
+    # пользовательский вывод команд идёт в stdout через print — это основная выдача CLI).
+    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
+                        format="%(message)s")
 
     cfg = load_config()
 
@@ -1763,8 +1764,6 @@ def main() -> None:
         ui.ui_check(cfg, DATA_DIR)
         return
     if args.ui_refresh:
-        import logging
-        logging.basicConfig(level=logging.INFO, format="%(message)s")
         from lib import ui
         ui.refresh(cfg, logging.getLogger("gsa_checker"))
         return
