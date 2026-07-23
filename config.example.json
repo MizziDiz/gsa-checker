@@ -77,6 +77,13 @@
   "autopilot_exclude_names": ["CC", "TEST", "Common"],
   "email_reminder_days": 30,
 
+  "orchestrator_token": "REPLACE_WITH_STRONG_RANDOM_TOKEN",
+  "orchestrator_bind": "127.0.0.1:8790",
+  "nodes": [
+    {"name": "NODE-A", "url": "https://node-a.internal:8787", "token": "REPLACE_WITH_NODE_A_AGENT_TOKEN"},
+    {"name": "NODE-B", "url": "https://node-b.internal:8787", "token": "REPLACE_WITH_NODE_B_AGENT_TOKEN"}
+  ],
+
   "stats_snapshots": true,
   "eta_window_min": 180,
   "stats_retention_days": 30,
