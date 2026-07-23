@@ -77,6 +77,10 @@
   "autopilot_exclude_names": ["CC", "TEST", "Common"],
   "email_reminder_days": 30,
 
+  "agent_token": "REPLACE_WITH_STRONG_RANDOM_TOKEN",
+  "agent_bind": "127.0.0.1:8787",
+  "agent_actions": {"respin-dry": ["--respin", "--only", "Split", "--dry-run"]},
+
   "stats_snapshots": true,
   "eta_window_min": 180,
   "stats_retention_days": 30,
