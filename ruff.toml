@@ -1,0 +1,17 @@
+# Ruff config для ядра gsa-checker (CLI + lib + утилиты + тесты).
+# dashboard.py / site / deploy-скрипты — отдельное приложение оператора (Cloudflare Pages),
+# вне зоны этого линта.
+target-version = "py311"
+line-length = 100
+
+extend-exclude = [
+  "dashboard.py",
+  "autodeploy.py",
+  "deploy_pages.py",
+  "site",
+  "data",
+]
+
+# Набор правил — дефолтный ruff (Pyflakes F + подмножество pycodestyle E):
+# ловит реальные баги (неопределённые имена, неиспользуемые импорты/переменные,
+# двусмысленные имена), не душит стилем.

@@ -11,3 +11,6 @@ venv/
 
 # вывод select_projects.py
 selected_projects.txt
+
+# внутренний handoff-документ: реальные IP/hostname/роли узлов — не для публичного репо
+HANDOFF.md
