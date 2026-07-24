@@ -1400,27 +1400,20 @@ def cmd_backup(cfg: dict, args) -> None:
 def cmd_emails(cfg: dict, args) -> None:
     """Обновляет секцию [email accounts] в .prj свежими почтами (уникальный набор на
     проект). Формат нативный для GSA (разделитель 0xFF). В catch-all-режиме дополнительно
-    ставит [data_value] your e-mail = случайный адрес на домене catch-all (→ Contact_Email;
-    иначе там остаётся старый temp-mail). Прочее .prj не трогает.
+    ОЧИЩАЕТ [data_value] your e-mail: GSA показывает это поле отдельным verification-аккаунтом
+    без POP3 («Server -»), который не верифицирует. Прочее .prj не трогает.
 
     ⚠ Как и --settings: делать при ЗАКРЫТОМ GSA (иначе перезапишет при выходе)."""
     from lib.prj import Prj
     from lib import emails as em
 
     catchall = bool(cfg.get("email_catchall"))
-    catchall_domain = None
     if catchall:
         if not cfg.get("email_catchall_hex"):
             sys.exit("email_catchall=true, но нет email_catchall_hex в data/gsa_checker.config.json "
                      "(hex catch-all-строки содержит POP3/логин/пароль — держим в data/, не в коде).")
         count = int(args.count or cfg.get("emails_catchall_count", 1) or 1)
         provider = "catch-all POP3 (спин-макрос)"
-        # домен catch-all (после @ в email-части аккаунта): на нём генерим КОНКРЕТНЫЙ
-        # случайный адрес для [data_value] your e-mail (→ Contact_Email). Иначе там
-        # оставался старый temp-mail. Не спин-макрос — он показывался бы «второй почтой»
-        # и как литерал в Contact_Email, если GSA его в этом поле не разворачивает.
-        _acct = em.build_catchall_lines(1, cfg.get("email_catchall_hex"))[0]
-        catchall_domain = _acct.split("=", 1)[1].split(em.FF)[0].rsplit("@", 1)[-1]
     else:
         count = int(args.count or cfg.get("emails_per_project", 20) or 20)
         provider = cfg.get("email_provider_ini", em.DEFAULT_PROVIDER)
@@ -1456,9 +1449,10 @@ def cmd_emails(cfg: dict, args) -> None:
         lines = (em.build_catchall_lines(count, cfg.get("email_catchall_hex"))
                  if catchall else em.build_account_lines(count, provider, domains, used=set()))
         prj.replace_section("email accounts", lines)
-        if catchall_domain:
-            prj.set_value("data_value", "your e-mail",
-                          em.random_email([catchall_domain], set()))
+        if catchall:
+            # GSA показывает [data_value] your e-mail отдельным verification-аккаунтом без
+            # POP3 («Server -», не верифицирует) — чистим, остаётся только catch-all с POP3.
+            prj.set_value("data_value", "your e-mail", "")
         done += 1
         print(f"  {'+ ' if args.apply else '(dry) '}{prj_path.name}: почт {old_n} → {count}")
         if args.apply:
