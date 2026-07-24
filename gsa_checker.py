@@ -1399,19 +1399,27 @@ def cmd_backup(cfg: dict, args) -> None:
 
 def cmd_emails(cfg: dict, args) -> None:
     """Обновляет секцию [email accounts] в .prj свежими почтами (уникальный набор на
-    проект). Формат нативный для GSA (разделитель 0xFF). Остальное .prj не трогает.
+    проект). Формат нативный для GSA (разделитель 0xFF). В catch-all-режиме дополнительно
+    приводит [data_value] your e-mail к тому же catch-all-адресу (иначе там остаётся старый
+    temp-mail, а Contact_Email=%your e-mail% его использует). Прочее .prj не трогает.
 
     ⚠ Как и --settings: делать при ЗАКРЫТОМ GSA (иначе перезапишет при выходе)."""
     from lib.prj import Prj
     from lib import emails as em
 
     catchall = bool(cfg.get("email_catchall"))
+    catchall_email = None
     if catchall:
         if not cfg.get("email_catchall_hex"):
             sys.exit("email_catchall=true, но нет email_catchall_hex в data/gsa_checker.config.json "
                      "(hex catch-all-строки содержит POP3/логин/пароль — держим в data/, не в коде).")
         count = int(args.count or cfg.get("emails_catchall_count", 1) or 1)
         provider = "catch-all POP3 (спин-макрос)"
+        # email-часть catch-all-аккаунта (спин-макрос @домен): ею же обновляем поле
+        # [data_value] your e-mail, иначе там остаётся старый temp-mail, а
+        # Contact_Email=%your e-mail% шлёт регистрации на мёртвый ящик.
+        _acct = em.build_catchall_lines(1, cfg.get("email_catchall_hex"))[0]
+        catchall_email = _acct.split("=", 1)[1].split(em.FF)[0]
     else:
         count = int(args.count or cfg.get("emails_per_project", 20) or 20)
         provider = cfg.get("email_provider_ini", em.DEFAULT_PROVIDER)
@@ -1447,6 +1455,8 @@ def cmd_emails(cfg: dict, args) -> None:
         lines = (em.build_catchall_lines(count, cfg.get("email_catchall_hex"))
                  if catchall else em.build_account_lines(count, provider, domains, used=set()))
         prj.replace_section("email accounts", lines)
+        if catchall_email:
+            prj.set_value("data_value", "your e-mail", catchall_email)
         done += 1
         print(f"  {'+ ' if args.apply else '(dry) '}{prj_path.name}: почт {old_n} → {count}")
         if args.apply:
