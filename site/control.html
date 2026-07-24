@@ -105,6 +105,8 @@ const $ = s => document.querySelector(s);
 const el = (t,c,txt) => { const e=document.createElement(t); if(c)e.className=c;
   if(txt!=null)e.textContent=txt; return e; };
 const jobs = [];               // {node, id, action, status, rc, tail}
+const apOpen = {};             // node -> форма автопилота открыта (переживает авто-refresh)
+const apVals = {};             // node -> {ключ: введённое} — чтобы правку не сбрасывало
 
 async function api(path, opts){
   const r = await fetch(API+path, Object.assign({headers:{"Content-Type":"application/json"}}, opts||{}));
@@ -148,8 +150,16 @@ async function loadStatus(){
       if(!s.error){
         const apBtn = el("button","apToggle","⚙ Автопилот");
         const form = apForm(name);
-        apBtn.onclick = () => { form.hidden = !form.hidden;
-          if(form.dataset.loaded !== "1") loadApCfg(name, form); };
+        apBtn.onclick = () => { form.hidden = !form.hidden; apOpen[name] = !form.hidden;
+          if(!form.hidden && form.dataset.loaded !== "1") loadApCfg(name, form); };
+        if(apOpen[name]){                       // переживаем перестройку грида (авто-refresh)
+          form.hidden = false;
+          if(apVals[name]){                     // восстановить уже введённое, не грузя заново
+            for(const inp of form.querySelectorAll("input"))
+              if(apVals[name][inp.dataset.k] !== undefined) inp.value = apVals[name][inp.dataset.k];
+            form.dataset.loaded = "1";
+          } else loadApCfg(name, form);
+        }
         card.append(apBtn, form);
       }
       box.appendChild(card);
@@ -166,6 +176,7 @@ function apForm(node){
     inp.type = (f.type === "int" || f.type === "num") ? "number" : "text";
     inp.dataset.k = f.k; inp.dataset.t = f.type;
     if(f.type === "list") inp.placeholder = "через запятую";
+    inp.oninput = () => { (apVals[node] = apVals[node] || {})[f.k] = inp.value; };
     row.appendChild(inp);
     box.appendChild(row);
   }
@@ -181,6 +192,7 @@ async function loadApCfg(node, box){
     for(const inp of box.querySelectorAll("input")){
       const v = cfg[inp.dataset.k];
       inp.value = (v === null || v === undefined) ? "" : (Array.isArray(v) ? v.join(", ") : String(v));
+      (apVals[node] = apVals[node] || {})[inp.dataset.k] = inp.value;
     }
     box.dataset.loaded = "1";
   }catch(e){ showErr("Автопилот-конфиг (" + node + "): " + e.message); }
@@ -252,7 +264,11 @@ function showErr(m){ const e=$("#err"); e.hidden=false; e.textContent="⚠ "+m; 
 
 $("#refresh").onclick = loadStatus;
 loadStatus();
-setInterval(loadStatus, 30000);   // мягкий автообновление статуса
+setInterval(() => {               // авто-обновление, но не рвём активную правку автопилота
+  const a = document.activeElement;
+  if(a && a.closest && a.closest(".apcfg")) return;
+  loadStatus();
+}, 30000);
 </script>
 </body>
 </html>
