@@ -128,3 +128,25 @@ def build_account_lines(count: int, provider: str = DEFAULT_PROVIDER,
         email = random_email(domains, used)
         lines.append(f"{i}={email}{FF}{provider}{FF}0{FF}{FF}{FF}0{FF}1{FF}1")
     return lines
+
+
+# GSA-catch-all аккаунт (кнопка «Catch All»): в email-поле — спин-макрос, GSA сам генерит
+# адреса; читает из нашего Mailpit по POP3. Поля 0xFF: [спин-макрос]@домен␦POP3-сервер␦порт␦
+# логин␦ПАРОЛЬ-в-GSA-шифре␦0␦1␦1.
+# ВАЖНО: сама строка содержит внутренний POP3-IP + логин + (шифрованный) пароль — поэтому в
+# коде её НЕТ (репозиторий публичный). Hex строки берётся из gitignored data-конфига:
+# ключ `email_catchall_hex` в data/gsa_checker.config.json. Захват из реального .prj
+# (кнопка Catch All в GSA + POP3), пароль в GSA-обфускации (фикс. алгоритм, проекты переносимы).
+
+
+def build_catchall_lines(count: int = 1, account_hex: str | None = None) -> list[str]:
+    """Строки [email accounts] для GSA-catch-all: одна фикс. запись (спин-макрос + POP3),
+    повторённая count раз. `account_hex` — hex 0xFF-строки аккаунта (из конфига
+    `email_catchall_hex`; содержит IP/логин/шифр-пароль, в коде не хранится). Байты
+    (0xFF-разделители и шифрованный пароль) пишутся как есть через surrogateescape."""
+    if not account_hex:
+        raise ValueError("build_catchall_lines: нет account_hex "
+                         "(задайте email_catchall_hex в data/gsa_checker.config.json)")
+    raw = bytes.fromhex(account_hex.replace(" ", ""))
+    value = raw.decode("utf-8", "surrogateescape")
+    return [f"{i}={value}" for i in range(max(1, int(count)))]

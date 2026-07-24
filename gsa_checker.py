@@ -1405,8 +1405,16 @@ def cmd_emails(cfg: dict, args) -> None:
     from lib.prj import Prj
     from lib import emails as em
 
-    count = int(args.count or cfg.get("emails_per_project", 20) or 20)
-    provider = cfg.get("email_provider_ini", em.DEFAULT_PROVIDER)
+    catchall = bool(cfg.get("email_catchall"))
+    if catchall:
+        if not cfg.get("email_catchall_hex"):
+            sys.exit("email_catchall=true, но нет email_catchall_hex в data/gsa_checker.config.json "
+                     "(hex catch-all-строки содержит POP3/логин/пароль — держим в data/, не в коде).")
+        count = int(args.count or cfg.get("emails_catchall_count", 1) or 1)
+        provider = "catch-all POP3 (спин-макрос)"
+    else:
+        count = int(args.count or cfg.get("emails_per_project", 20) or 20)
+        provider = cfg.get("email_provider_ini", em.DEFAULT_PROVIDER)
     domains = as_list(cfg.get("email_domains", [])) or em.DEFAULT_DOMAINS
 
     target_dir = Path(args.dir or cfg.get("gsa_projects_dir", ""))
@@ -1436,7 +1444,8 @@ def cmd_emails(cfg: dict, args) -> None:
             print(f"  ✖ {prj_path.name}: не прочитан ({exc})")
             continue
         old_n = len(prj.list_keys("email accounts"))
-        lines = em.build_account_lines(count, provider, domains, used=set())
+        lines = (em.build_catchall_lines(count, cfg.get("email_catchall_hex"))
+                 if catchall else em.build_account_lines(count, provider, domains, used=set()))
         prj.replace_section("email accounts", lines)
         done += 1
         print(f"  {'+ ' if args.apply else '(dry) '}{prj_path.name}: почт {old_n} → {count}")
