@@ -1660,25 +1660,35 @@ def cmd_check(cfg: dict) -> None:
 
 
 def cmd_gsa_log(cfg: dict, args) -> None:
-    """Читает файловый лог GSA SER. Папка: gsa_log_dir из конфига, иначе <projects>/../log
-    или <gsa_exe>/log. Печатает последние N строк новейшего *.log; с --mail — только строки
-    про почту/верификацию (e-mail/POP3/verified/activate). Read-only."""
-    candidates: list[Path] = []
+    """Читает файловый лог GSA SER (read-only). Ищет *.log в gsa_log_dir (конфиг),
+    <projects>/../log, <projects>/.., <gsa_exe>/log, <gsa_exe>/... Печатает последние N строк
+    новейшего; с --mail — только строки про почту/верификацию. Если *.log нет — показывает
+    .log/.txt в этих папках (найти debug-лог, который GSA мог положить нестандартно)."""
+    cand: list[Path] = []
     if cfg.get("gsa_log_dir"):
-        candidates.append(Path(cfg["gsa_log_dir"]))
+        cand.append(Path(cfg["gsa_log_dir"]))
     if cfg.get("gsa_projects_dir"):
-        candidates.append(Path(cfg["gsa_projects_dir"]).parent / "log")
+        base = Path(cfg["gsa_projects_dir"]).parent
+        cand += [base / "log", base]
     if cfg.get("gsa_exe_path"):
-        candidates.append(Path(cfg["gsa_exe_path"]).parent / "log")
-    log_dir = next((d for d in candidates if d.is_dir()), None)
-    if not log_dir:
-        tried = ", ".join(str(d) for d in candidates) or "(нет путей в конфиге)"
-        sys.exit(f"GSA-лог-папка не найдена (пробовал: {tried}). Включите в GSA сохранение "
-                 "лога в файл (Options → Advanced → Logging) или задайте gsa_log_dir в конфиге.")
-    logs = sorted(log_dir.glob("*.log"), key=lambda p: p.stat().st_mtime)
-    if not logs:
-        sys.exit(f"В {log_dir} нет *.log — включите в GSA сохранение лога в файл.")
-    newest = logs[-1]
+        base = Path(cfg["gsa_exe_path"]).parent
+        cand += [base / "log", base]
+    dirs, seen = [], set()
+    for d in cand:
+        if d.is_dir() and str(d) not in seen:
+            seen.add(str(d))
+            dirs.append(d)
+    found = [p for d in dirs for p in d.glob("*.log")]
+    if not found:
+        # лог не в стандартном месте (debug-режим мог класть иначе) — покажем, что есть
+        print("GSA *.log не найден. Содержимое кандидат-папок (.log/.txt):")
+        for d in dirs:
+            names = sorted(p.name for p in d.iterdir()
+                           if p.is_file() and p.suffix.lower() in (".log", ".txt"))[:20]
+            print(f"  {d}\n     {names or '— нет .log/.txt'}")
+        print("Найдёшь debug-лог — задай его папку через gsa_log_dir в data-конфиге.")
+        return
+    newest = max(found, key=lambda p: p.stat().st_mtime)
     lines = newest.read_text(encoding="utf-8", errors="replace").splitlines()
     n = int(getattr(args, "lines", None) or 300)
     if getattr(args, "mail", False):
