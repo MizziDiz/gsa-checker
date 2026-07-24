@@ -45,6 +45,16 @@
       padding:9px;overflow:auto;max-height:220px;font-size:12px;color:#c9d3de;white-space:pre-wrap}
   .empty{color:var(--mut);padding:14px}
   #err{color:#ffb4ab;font-size:13px;padding:10px 0}
+  .apToggle{margin-top:8px;font-size:12.5px;padding:5px 9px}
+  .apcfg{margin-top:10px;border-top:1px solid var(--edge);padding-top:10px;
+         display:flex;flex-direction:column;gap:7px}
+  .aprow{display:flex;align-items:center;gap:8px;font-size:12.5px}
+  .apk{color:var(--mut);flex:1}
+  .apcfg input{width:150px;background:#0b0e13;border:1px solid var(--edge);border-radius:6px;
+               color:var(--fg);padding:5px 7px;font:inherit}
+  .apbar{display:flex;align-items:center;gap:10px;margin-top:4px}
+  .apsave{padding:5px 12px;font-size:12.5px}
+  .apmsg{font-size:12px;color:var(--mut)}
 </style>
 </head>
 <body>
@@ -74,8 +84,21 @@ const ACTIONS = [
   {id:"report",        label:"Отчёт (боевой)",     mutating:true},
   {id:"autopilot-dry", label:"Автопилот (dry)"},
   {id:"autopilot",     label:"Автопилот (--apply)", mutating:true},
+  {id:"emails-dry",    label:"Обновить почты (dry)"},
+  {id:"emails",        label:"Обновить почты",     mutating:true},
   {id:"collect",       label:"Собрать .success"},
   {id:"backup",        label:"Бэкап"},
+  {id:"git-pull",      label:"git pull",           mutating:true},
+];
+
+// автопилот-конфиг (whitelist на агенте): поле → {метка, тип}
+const AP_FIELDS = [
+  {k:"autopilot_include_names",  label:"Заполнять проекты (маска имён)", type:"list"},
+  {k:"autopilot_exclude_names",  label:"Исключить (маска имён)",         type:"list"},
+  {k:"autopilot_min_targets",    label:"Порог долива (min targets)",     type:"int"},
+  {k:"autopilot_batch_limit_mb", label:"Размер батча, МБ",               type:"num"},
+  {k:"autopilot_append_ext",     label:"Расширение дозаписи",            type:"str"},
+  {k:"autopilot_batch_glob",     label:"Маска файлов пула",              type:"str"},
 ];
 
 const $ = s => document.querySelector(s);
@@ -122,9 +145,63 @@ async function loadStatus(){
         acts.appendChild(b);
       }
       card.appendChild(acts);
+      if(!s.error){
+        const apBtn = el("button","apToggle","⚙ Автопилот");
+        const form = apForm(name);
+        apBtn.onclick = () => { form.hidden = !form.hidden;
+          if(form.dataset.loaded !== "1") loadApCfg(name, form); };
+        card.append(apBtn, form);
+      }
       box.appendChild(card);
     }
   }catch(e){ showErr(e.message); $("#conn").textContent="нет связи"; }
+}
+
+function apForm(node){
+  const box = el("div","apcfg"); box.hidden = true;
+  for(const f of AP_FIELDS){
+    const row = el("label","aprow");
+    row.append(el("span","apk", f.label));
+    const inp = el("input");
+    inp.type = (f.type === "int" || f.type === "num") ? "number" : "text";
+    inp.dataset.k = f.k; inp.dataset.t = f.type;
+    if(f.type === "list") inp.placeholder = "через запятую";
+    row.appendChild(inp);
+    box.appendChild(row);
+  }
+  const save = el("button","apsave","Сохранить"), msg = el("span","apmsg","");
+  save.onclick = () => saveApCfg(node, box, save, msg);
+  const bar = el("div","apbar"); bar.append(save, msg);
+  box.appendChild(bar);
+  return box;
+}
+async function loadApCfg(node, box){
+  try{
+    const cfg = await api("/config/" + encodeURIComponent(node));
+    for(const inp of box.querySelectorAll("input")){
+      const v = cfg[inp.dataset.k];
+      inp.value = (v === null || v === undefined) ? "" : (Array.isArray(v) ? v.join(", ") : String(v));
+    }
+    box.dataset.loaded = "1";
+  }catch(e){ showErr("Автопилот-конфиг (" + node + "): " + e.message); }
+}
+async function saveApCfg(node, box, btn, msg){
+  const set = {};
+  for(const inp of box.querySelectorAll("input")){
+    const t = inp.dataset.t, raw = inp.value.trim();
+    if(t === "list"){ set[inp.dataset.k] = raw ? raw.split(",").map(s => s.trim()).filter(Boolean) : []; }
+    else if(t === "int"){ if(raw === "") continue; const n = parseInt(raw,10); if(Number.isFinite(n)) set[inp.dataset.k] = n; }
+    else if(t === "num"){ if(raw === "") continue; const n = parseFloat(raw); if(Number.isFinite(n)) set[inp.dataset.k] = n; }
+    else { if(raw === "") continue; set[inp.dataset.k] = raw; }
+  }
+  btn.disabled = true; msg.textContent = "…";
+  try{
+    const r = await api("/config", {method:"POST", body: JSON.stringify({target:node, set:set})});
+    const res = r[node] || r;
+    if(res && (res.ok || res.applied)) msg.textContent = "сохранено ✓";
+    else msg.textContent = "ошибка: " + JSON.stringify(res && res.detail ? res.detail : res);
+  }catch(e){ msg.textContent = "ошибка: " + e.message; }
+  finally{ btn.disabled = false; }
 }
 function kv(k,v){ const d=el("div","kv"); d.innerHTML="<b>"+k+":</b> "; d.append(document.createTextNode(v)); return d; }
 

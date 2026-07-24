@@ -21,8 +21,14 @@
   GET  /health                 -> {node, ok, time}                 (без токена)
   GET  /actions                -> список разрешённых действий      (токен)
   GET  /status                 -> остаток/последний забор/свежесть (токен)
-  POST /run   {"action": "..."} -> {job_id}                         (токен)
+  POST /run   {"action": "..."} -> {job_id}   (gsa-действия + системные, напр. git-pull)
   GET  /job/<id>               -> {status, rc, tail, started, ...}  (токен)
+  GET  /config                 -> текущие автопилот-ключи (whitelist)        (токен)
+  POST /config {"set": {...}}  -> запись автопилот-ключей (только whitelist)  (токен)
+
+Системные действия (git-pull) и правка автопилот-конфига НЕ ломают whitelist-модель:
+git-pull — фиксированный argv (`git -C <dir> pull --ff-only`) по папкам из agent_git_dirs;
+/config пишет ТОЛЬКО ключи из AUTOPILOT_KEYS (маски/пороги), пути и секреты не трогает.
 """
 
 from __future__ import annotations
@@ -31,6 +37,7 @@ import argparse
 import hmac
 import json
 import logging
+import os
 import subprocess
 import sys
 import threading
@@ -57,13 +64,27 @@ DEFAULT_ACTIONS: dict[str, list[str]] = {
     "report":       ["--report"],
     "autopilot-dry": ["--autopilot", "--dry-run"],
     "autopilot":    ["--autopilot", "--apply"],
+    "emails-dry":   ["--emails", "--dry-run"],
+    "emails":       ["--emails", "--apply"],
     "collect":      ["--collect-success"],
     "backup":       ["--backup", "--only", "Split"],
+}
+
+# Ключи автопилота, разрешённые к удалённой правке из панели (маски + пороги).
+# Пути (*_dir), секреты и exe СЮДА НЕ входят — их меняют только на самой ноде.
+AUTOPILOT_KEYS: dict[str, str] = {
+    "autopilot_include_names":  "list[str]",   # маска проектов для заполнения
+    "autopilot_exclude_names":  "list[str]",   # маска исключений
+    "autopilot_min_targets":    "int",         # порог долива таргетов
+    "autopilot_batch_limit_mb": "number",      # размер батча, МБ
+    "autopilot_append_ext":     "str",         # расширение файла дозаписи
+    "autopilot_batch_glob":     "str",         # маска файлов пула
 }
 
 # job_id -> dict(status, rc, action, started, finished, log_path)
 _JOBS: dict[str, dict] = {}
 _JOBS_LOCK = threading.Lock()
+_CONFIG_LOCK = threading.Lock()
 
 
 def load_config() -> dict:
@@ -89,6 +110,42 @@ def allowed_actions(cfg: dict) -> dict[str, list[str]]:
     return actions
 
 
+def git_dirs(cfg: dict) -> list[str]:
+    """Папки для `git-pull`. По умолчанию — папка агента (напр. A-GSA)."""
+    dirs = cfg.get("agent_git_dirs")
+    if isinstance(dirs, list):
+        got = [str(d) for d in dirs if isinstance(d, str) and d.strip()]
+        if got:
+            return got
+    return [str(ROOT)]
+
+
+def system_actions(cfg: dict) -> dict[str, list[list[str]]]:
+    """Системные действия (не gsa_checker): имя → список ФИКС. команд (argv, без shell)."""
+    return {"git-pull": [["git", "-C", d, "pull", "--ff-only"] for d in git_dirs(cfg)]}
+
+
+def _validate_autopilot(updates: dict) -> tuple[dict, list[str]]:
+    """Проверяет обновления автопилот-конфига по whitelist + типам. → (clean, errors)."""
+    clean: dict = {}
+    errors: list[str] = []
+    for k, v in (updates or {}).items():
+        kind = AUTOPILOT_KEYS.get(k)
+        if kind is None:
+            errors.append(f"{k}: ключ не разрешён")
+        elif kind == "list[str]" and not (isinstance(v, list) and all(isinstance(x, str) for x in v)):
+            errors.append(f"{k}: ожидается список строк")
+        elif kind == "str" and not isinstance(v, str):
+            errors.append(f"{k}: ожидается строка")
+        elif kind == "int" and (isinstance(v, bool) or not isinstance(v, int)):
+            errors.append(f"{k}: ожидается целое")
+        elif kind == "number" and (isinstance(v, bool) or not isinstance(v, (int, float))):
+            errors.append(f"{k}: ожидается число")
+        else:
+            clean[k] = v
+    return clean, errors
+
+
 def _audit(entry: dict) -> None:
     try:
         AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -98,25 +155,34 @@ def _audit(entry: dict) -> None:
         pass
 
 
-def _start_job(action: str, args: list[str]) -> str:
-    """Запускает gsa_checker.py с фиксированными args в фоне. Возвращает job_id."""
+def _start_job(action: str, cmds: list[list[str]]) -> str:
+    """Запускает одну/несколько ФИКС. команд последовательно в фоне. Возвращает job_id.
+
+    Останавливается на первой команде с ненулевым rc. Всё без shell (argv-списки).
+    """
     job_id = uuid.uuid4().hex[:12]
     JOBS_DIR.mkdir(parents=True, exist_ok=True)
     log_path = JOBS_DIR / f"{job_id}.log"
-    argv = [sys.executable, str(ROOT / "gsa_checker.py"), *args]
     with _JOBS_LOCK:
         _JOBS[job_id] = {"status": "running", "rc": None, "action": action,
                          "started": int(time.time()), "finished": None,
                          "log_path": str(log_path)}
 
     def run() -> None:
-        rc = -1
+        rc = 0
         try:
             with log_path.open("wb") as out:
-                rc = subprocess.run(argv, stdout=out, stderr=subprocess.STDOUT,
-                                    cwd=str(ROOT)).returncode
+                for argv in cmds:
+                    out.write(("$ " + " ".join(argv) + "\n").encode("utf-8"))
+                    out.flush()
+                    rc = subprocess.run(argv, stdout=out, stderr=subprocess.STDOUT,
+                                        cwd=str(ROOT)).returncode
+                    if rc != 0:
+                        break
         except OSError as exc:
-            log_path.write_text(f"agent: не запустить: {exc}\n", encoding="utf-8")
+            rc = -1
+            with log_path.open("ab") as out:
+                out.write(f"agent: не запустить: {exc}\n".encode("utf-8"))
         with _JOBS_LOCK:
             _JOBS[job_id].update(status="done", rc=rc, finished=int(time.time()))
         _audit({"event": "job_done", "job_id": job_id, "action": action, "rc": rc})
@@ -197,9 +263,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send(401, {"error": "unauthorized"})
             return
         if path == "/actions":
-            self._send(200, {"actions": sorted(allowed_actions(self.cfg))})
+            names = sorted(list(allowed_actions(self.cfg)) + list(system_actions(self.cfg)))
+            self._send(200, {"actions": names})
         elif path == "/status":
             self._send(200, _node_status(self.cfg))
+        elif path == "/config":
+            cfg = load_config()                       # читаем свежий файл, не кэш
+            self._send(200, {k: cfg.get(k) for k in AUTOPILOT_KEYS})
         elif path.startswith("/job/"):
             view = _job_view(path[len("/job/"):])
             self._send(200 if view else 404, view or {"error": "no such job"})
@@ -212,25 +282,52 @@ class Handler(BaseHTTPRequestHandler):
             _audit({"event": "deny", "path": path, "from": self.client_address[0]})
             self._send(401, {"error": "unauthorized"})
             return
-        if path != "/run":
+        if path not in ("/run", "/config"):
             self._send(404, {"error": "not found"})
             return
         try:
-            length = min(int(self.headers.get("Content-Length", 0)), 10_000)
+            length = min(int(self.headers.get("Content-Length", 0)), 20_000)
             payload = json.loads(self.rfile.read(length) or b"{}")
-            action = str(payload.get("action", ""))
         except (ValueError, json.JSONDecodeError):
             self._send(400, {"error": "bad json"})
             return
-        actions = allowed_actions(self.cfg)
-        if action not in actions:
-            _audit({"event": "run_denied", "action": action, "from": self.client_address[0]})
-            self._send(403, {"error": "action not allowed", "allowed": sorted(actions)})
+
+        if path == "/run":
+            action = str(payload.get("action", ""))
+            gsa = allowed_actions(self.cfg)
+            sysa = system_actions(self.cfg)
+            if action in gsa:
+                cmds = [[sys.executable, str(ROOT / "gsa_checker.py"), *gsa[action]]]
+            elif action in sysa:
+                cmds = sysa[action]
+            else:
+                _audit({"event": "run_denied", "action": action, "from": self.client_address[0]})
+                self._send(403, {"error": "action not allowed",
+                                 "allowed": sorted(list(gsa) + list(sysa))})
+                return
+            job_id = _start_job(action, cmds)
+            _audit({"event": "run", "action": action, "job_id": job_id,
+                    "from": self.client_address[0]})
+            self._send(202, {"job_id": job_id, "action": action})
             return
-        job_id = _start_job(action, actions[action])
-        _audit({"event": "run", "action": action, "job_id": job_id,
-                "from": self.client_address[0]})
-        self._send(202, {"job_id": job_id, "action": action})
+
+        # path == "/config": запись ТОЛЬКО whitelist-ключей автопилота, атомарно
+        clean, errors = _validate_autopilot(payload.get("set") or {})
+        if errors:
+            self._send(400, {"error": "validation", "detail": errors})
+            return
+        if not clean:
+            self._send(400, {"error": "no valid keys in 'set'"})
+            return
+        with _CONFIG_LOCK:
+            cfg = load_config()
+            cfg.update(clean)
+            tmp = CONFIG_PATH.with_name(CONFIG_PATH.name + ".tmp")
+            tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp, CONFIG_PATH)
+            type(self).cfg = cfg                      # обновить кэш агента
+        _audit({"event": "config_set", "keys": sorted(clean), "from": self.client_address[0]})
+        self._send(200, {"ok": True, "applied": clean})
 
 
 def main() -> None:

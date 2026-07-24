@@ -40,6 +40,9 @@ class FakeAgent(BaseHTTPRequestHandler):
         if self.path == "/status":
             self._ok({"node": "fake", "jobs_running": 0} if self._auth()
                      else {"error": "unauthorized"}, 200 if self._auth() else 401)
+        elif self.path == "/config":
+            self._ok({"autopilot_min_targets": 100} if self._auth()
+                     else {"error": "unauthorized"}, 200 if self._auth() else 401)
         elif self.path.startswith("/job/"):
             self._ok({"job_id": self.path.split("/")[-1], "status": "done", "rc": 0})
         else:
@@ -50,6 +53,8 @@ class FakeAgent(BaseHTTPRequestHandler):
         self.rfile.read(length)
         if not self._auth():
             self._ok({"error": "unauthorized"}, 401)
+        elif self.path == "/config":
+            self._ok({"ok": True, "applied": {"autopilot_min_targets": 500}}, 200)
         else:
             self._ok({"job_id": "fakejob1", "action": "x"}, 202)
 
@@ -134,3 +139,15 @@ def test_run_dispatch(stack):
     assert code == 200 and body["live"]["job_id"] == "fakejob1"
     # несуществующая нода
     assert _post(stack + "/run", {"target": "ghost", "action": "x"}, token=OTOKEN)[0] == 404
+
+
+def test_config_get_proxy(stack):
+    code, body = _get(stack + "/config/live", token=OTOKEN)
+    assert code == 200 and body["autopilot_min_targets"] == 100
+    assert _get(stack + "/config/ghost", token=OTOKEN)[0] == 404
+
+
+def test_config_set_dispatch(stack):
+    code, body = _post(stack + "/config",
+                       {"target": "live", "set": {"autopilot_min_targets": 500}}, token=OTOKEN)
+    assert code == 200 and body["live"]["ok"] is True
