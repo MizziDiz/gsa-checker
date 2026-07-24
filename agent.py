@@ -68,6 +68,8 @@ DEFAULT_ACTIONS: dict[str, list[str]] = {
     "emails":       ["--emails", "--apply"],
     "collect":      ["--collect-success"],
     "backup":       ["--backup", "--only", "Split"],
+    "gsa-log":      ["--gsa-log"],
+    "gsa-log-mail": ["--gsa-log", "--mail"],
 }
 
 # Ключи автопилота, разрешённые к удалённой правке из панели (маски + пороги).

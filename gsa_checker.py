@@ -1659,6 +1659,38 @@ def cmd_check(cfg: dict) -> None:
             print(f"  {ext or '(без расширения)':<14} {n}")
 
 
+def cmd_gsa_log(cfg: dict, args) -> None:
+    """Читает файловый лог GSA SER. Папка: gsa_log_dir из конфига, иначе <projects>/../log
+    или <gsa_exe>/log. Печатает последние N строк новейшего *.log; с --mail — только строки
+    про почту/верификацию (e-mail/POP3/verified/activate). Read-only."""
+    candidates: list[Path] = []
+    if cfg.get("gsa_log_dir"):
+        candidates.append(Path(cfg["gsa_log_dir"]))
+    if cfg.get("gsa_projects_dir"):
+        candidates.append(Path(cfg["gsa_projects_dir"]).parent / "log")
+    if cfg.get("gsa_exe_path"):
+        candidates.append(Path(cfg["gsa_exe_path"]).parent / "log")
+    log_dir = next((d for d in candidates if d.is_dir()), None)
+    if not log_dir:
+        tried = ", ".join(str(d) for d in candidates) or "(нет путей в конфиге)"
+        sys.exit(f"GSA-лог-папка не найдена (пробовал: {tried}). Включите в GSA сохранение "
+                 "лога в файл (Options → Advanced → Logging) или задайте gsa_log_dir в конфиге.")
+    logs = sorted(log_dir.glob("*.log"), key=lambda p: p.stat().st_mtime)
+    if not logs:
+        sys.exit(f"В {log_dir} нет *.log — включите в GSA сохранение лога в файл.")
+    newest = logs[-1]
+    lines = newest.read_text(encoding="utf-8", errors="replace").splitlines()
+    n = int(getattr(args, "lines", None) or 300)
+    if getattr(args, "mail", False):
+        kw = ("e-mail", "email", "pop3", "verif", "activat", "confirm", "почт")
+        out = [ln for ln in lines if any(k in ln.lower() for k in kw)][-n:]
+        print(f"── GSA-лог {newest.name}: строки про почту/верификацию (посл. {len(out)}) ──")
+    else:
+        out = lines[-n:]
+        print(f"── GSA-лог {newest.name}: последние {len(out)} строк ──")
+    print("\n".join(out) if out else "(нет подходящих строк)")
+
+
 def _force_utf8_output() -> None:
     """Печать в UTF-8 независимо от окружения. На русской Windows при выводе в файл/пайп
     (планировщик с редиректом в лог) Python берёт cp1251, и символы ≥ → ✓ ⚠ эмодзи
@@ -1680,6 +1712,11 @@ def main() -> None:
     ap.add_argument("--json", action="store_true", help="вывод в JSON")
     ap.add_argument("--check", action="store_true",
                     help="диагностика путей и файлов")
+    ap.add_argument("--gsa-log", action="store_true",
+                    help="показать файловый лог GSA SER (read-only)")
+    ap.add_argument("--mail", action="store_true",
+                    help="с --gsa-log: только строки про почту/верификацию")
+    ap.add_argument("--lines", type=int, help="с --gsa-log: сколько строк (по умолчанию 300)")
     ap.add_argument("--stats", action="store_true",
                     help="снимок статистики по проектам (остаток/verified/…)")
     ap.add_argument("--report", action="store_true",
@@ -1807,6 +1844,9 @@ def main() -> None:
         return
     if args.check:
         cmd_check(cfg)
+        return
+    if args.gsa_log:
+        cmd_gsa_log(cfg, args)
         return
     if args.remaining:
         data = collect_remaining(cfg)
