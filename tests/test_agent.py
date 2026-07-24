@@ -23,8 +23,8 @@ TOKEN = "test-token-1234567890"
 def test_allowed_actions_defaults_and_extras():
     base = agent.allowed_actions({})
     assert "autopilot" in base and "report" in base
-    # мутирующих команд в дефолте нет
-    assert "respin" not in base and "emails" not in base
+    # мутирующих .prj команд (respin/settings) в дефолте нет
+    assert "respin" not in base and "settings" not in base
     # расширение из конфига добавляется; кривое (не список строк) отбрасывается
     ext = agent.allowed_actions({"agent_actions": {"x": ["--stats"], "bad": "oops"}})
     assert ext["x"] == ["--stats"]
@@ -97,3 +97,47 @@ def test_run_and_job(server):
         time.sleep(0.2)
     else:
         pytest.fail("job не завершился")
+
+
+def test_system_actions_git_pull():
+    # по умолчанию — папка агента; фиксированный argv, без shell
+    assert agent.system_actions({})["git-pull"] == [
+        ["git", "-C", str(agent.ROOT), "pull", "--ff-only"]]
+    a = agent.system_actions({"agent_git_dirs": ["C:\\A-GSA", "C:\\Aparser"]})
+    assert a["git-pull"] == [["git", "-C", "C:\\A-GSA", "pull", "--ff-only"],
+                             ["git", "-C", "C:\\Aparser", "pull", "--ff-only"]]
+
+
+def test_git_pull_in_actions_list(server):
+    _, body = _get(server + "/actions", token=TOKEN)
+    assert "git-pull" in body["actions"]
+
+
+def test_validate_autopilot():
+    clean, errors = agent._validate_autopilot(
+        {"autopilot_min_targets": 30000, "autopilot_include_names": ["Split", "S2"]})
+    assert not errors and clean["autopilot_min_targets"] == 30000
+    assert agent._validate_autopilot({"agent_token": "x"})[1]          # не-whitelist ключ
+    assert agent._validate_autopilot({"autopilot_min_targets": "many"})[1]  # неверный тип
+    assert agent._validate_autopilot({"autopilot_include_names": "Split"})[1]  # не список
+
+
+def test_config_get_and_set(server, tmp_path, monkeypatch):
+    cfgfile = tmp_path / "gsa_checker.config.json"
+    cfgfile.write_text(json.dumps({"agent_token": TOKEN, "autopilot_min_targets": 100}),
+                       encoding="utf-8")
+    monkeypatch.setattr(agent, "CONFIG_PATH", cfgfile)
+    # GET /config — только whitelist, секретов нет
+    code, body = _get(server + "/config", token=TOKEN)
+    assert code == 200 and body["autopilot_min_targets"] == 100 and "agent_token" not in body
+    # POST /config — валидное обновление, остальной конфиг (секрет) сохранён
+    code, body = _post(server + "/config",
+                       {"set": {"autopilot_min_targets": 500, "autopilot_include_names": ["Split"]}},
+                       token=TOKEN)
+    assert code == 200 and body["ok"] is True
+    saved = json.loads(cfgfile.read_text(encoding="utf-8"))
+    assert saved["autopilot_min_targets"] == 500 and saved["agent_token"] == TOKEN
+    # POST /config — неразрешённый ключ отклоняется, файл не тронут
+    code, _ = _post(server + "/config", {"set": {"gsa_exe_path": "C:\\evil"}}, token=TOKEN)
+    assert code == 400
+    assert "gsa_exe_path" not in json.loads(cfgfile.read_text(encoding="utf-8"))

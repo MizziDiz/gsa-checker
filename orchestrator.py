@@ -21,6 +21,8 @@
   GET  /status                          -> {name: <agent /status | error>} (токен, параллельно)
   POST /run  {"target":"name|all","action":"..."} -> {name: {job_id|error}} (токен)
   GET  /job/<node>/<job_id>             -> проксирует agent /job/<id>       (токен)
+  GET  /config/<node>                   -> проксирует agent GET /config     (токен)
+  POST /config {"target":"name|all","set":{...}} -> {name: agent /config}   (токен)
 """
 
 from __future__ import annotations
@@ -159,6 +161,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, {"error": "no such node/job"})
                 return
             self._send(200, _call_agent(reg[parts[0]], f"/job/{parts[1]}"))
+        elif path.startswith("/config/"):
+            node = path[len("/config/"):]
+            if node not in reg:
+                self._send(404, {"error": "no such node"})
+                return
+            self._send(200, _call_agent(reg[node], "/config"))
         else:
             self._send(404, {"error": "not found"})
 
@@ -168,29 +176,35 @@ class Handler(BaseHTTPRequestHandler):
             _audit({"event": "deny", "path": path, "from": self.client_address[0]})
             self._send(401, {"error": "unauthorized"})
             return
-        if path != "/run":
+        if path not in ("/run", "/config"):
             self._send(404, {"error": "not found"})
             return
         try:
-            length = min(int(self.headers.get("Content-Length", 0)), 10_000)
+            length = min(int(self.headers.get("Content-Length", 0)), 20_000)
             payload = json.loads(self.rfile.read(length) or b"{}")
-            action = str(payload.get("action", ""))
             target = str(payload.get("target", "all"))
         except (ValueError, json.JSONDecodeError):
             self._send(400, {"error": "bad json"})
-            return
-        if not action:
-            self._send(400, {"error": "no action"})
             return
         reg = node_registry(self.cfg)
         if target != "all" and target not in reg:
             self._send(404, {"error": f"no such node: {target}"})
             return
         chosen = reg if target == "all" else {target: reg[target]}
-        _audit({"event": "run", "action": action, "target": target,
-                "from": self.client_address[0]})
-        # оркестратор лишь передаёт имя действия — whitelist проверяет агент
-        result = _fanout(chosen, "/run", "POST", {"action": action})
+
+        if path == "/run":
+            action = str(payload.get("action", ""))
+            if not action:
+                self._send(400, {"error": "no action"})
+                return
+            _audit({"event": "run", "action": action, "target": target,
+                    "from": self.client_address[0]})
+            # оркестратор лишь передаёт имя действия — whitelist проверяет агент
+            result = _fanout(chosen, "/run", "POST", {"action": action})
+        else:  # /config — оркестратор лишь передаёт set, whitelist проверяет агент
+            _audit({"event": "config_set", "target": target,
+                    "from": self.client_address[0]})
+            result = _fanout(chosen, "/config", "POST", {"set": payload.get("set") or {}})
         self._send(200, result)
 
 
