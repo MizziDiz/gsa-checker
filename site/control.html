@@ -22,6 +22,9 @@
   button.danger{border-color:#5a1f22;color:#ffb4ab}
   button.danger:hover{border-color:var(--danger)}
   button:disabled{opacity:.5;cursor:default}
+  .linkbtn{font:inherit;color:var(--fg);background:var(--card);border:1px solid var(--edge);
+           border-radius:7px;padding:6px 11px;text-decoration:none}
+  .linkbtn:hover{border-color:var(--acc)}
   main{padding:18px;max-width:1100px;margin:0 auto}
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
   .node{background:var(--card);border:1px solid var(--edge);border-radius:11px;padding:14px}
@@ -62,6 +65,7 @@
   <h1>🕹 gsa-checker · Control</h1>
   <span class="sp"></span>
   <span class="badge" id="conn">…</span>
+  <a class="linkbtn" href="https://mailbox.graniteloom.com" target="_blank" rel="noopener">📬 Почта</a>
   <button id="refresh">Обновить</button>
 </header>
 <main>
