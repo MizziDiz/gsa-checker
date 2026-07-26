@@ -1052,6 +1052,16 @@ def cmd_create(cfg: dict, args) -> None:
     if args.keywords:
         prj.set_value("data_value", "Keywords", args.keywords)
         changed.append("Keywords")
+    if getattr(args, "anchor", None):
+        # анкоры — по строке (литеральный \n в .prj); GSA крутит список ≈ поровну
+        prj.set_value("data_value", "Anchor_Text", "\\n".join(args.anchor))
+        changed.append(f"Anchor_Text×{len(args.anchor)}")
+    if getattr(args, "links_per_day", 0) and args.links_per_day > 0:
+        # лимит ссылок/день = пауза проекта после N сабмишенов на сутки (1440 мин)
+        prj.set_value("Options", "pause project on", "1")
+        prj.set_value("Options", "pause project submissions", str(args.links_per_day))
+        prj.set_value("Options", "pause project minutes", "1440")
+        changed.append(f"лимит {args.links_per_day}/день")
 
     # .targets из батча
     targets: list[str] = []
@@ -1760,6 +1770,10 @@ def main() -> None:
     ap.add_argument("--out", help="папка вывода (--create)")
     ap.add_argument("--limit", type=int, default=0, help="макс. целей (--create)")
     ap.add_argument("--force", action="store_true", help="перезаписать (--create)")
+    ap.add_argument("--anchor", action="append",
+                    help="анкор (повторяемый; --create; в Anchor_Text, GSA крутит ≈ поровну)")
+    ap.add_argument("--links-per-day", type=int, default=0,
+                    help="лимит ссылок/день (--create; пауза проекта после N сабмишенов)")
     ap.add_argument("--ui-check", action="store_true",
                     help="диагностика окна GSA (pywinauto) → data/ui_controls.txt")
     ap.add_argument("--ui-refresh", action="store_true",
