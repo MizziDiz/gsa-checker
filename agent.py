@@ -70,6 +70,8 @@ DEFAULT_ACTIONS: dict[str, list[str]] = {
     "backup":       ["--backup", "--only", "Split"],
     "gsa-log":      ["--gsa-log"],
     "gsa-log-mail": ["--gsa-log", "--mail"],
+    "import-boost":     ["--import-boost"],
+    "import-boost-dry": ["--import-boost", "--dry-run"],
 }
 
 # Ключи автопилота, разрешённые к удалённой правке из панели (маски + пороги).
