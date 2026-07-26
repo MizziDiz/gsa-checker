@@ -1086,6 +1086,52 @@ def cmd_create(cfg: dict, args) -> None:
     print("Импортируйте папку/файлы в GSA (или скопируйте в gsa_projects_dir).")
 
 
+def cmd_import_boost(cfg: dict, args) -> None:
+    """Импорт готовых boost-бандлов из очереди в ЖИВОЙ GSA (нода-исполнитель, напр. gsa-02):
+    копирует <name>.prj/.targets из intake_queue_dir в gsa_projects_dir, переносит из
+    очереди в imported, затем дёргает ui.refresh — GSA подхватывает новые проекты.
+
+    ⚠ Ставить в планировщик ноды (раз в N мин) при ЗАПУЩЕННОМ GSA (refresh идёт по UI)."""
+    import shutil
+    queue = Path(cfg.get("intake_queue_dir", ""))
+    if not str(queue) or not queue.is_dir():
+        sys.exit("Не задан/не найден intake_queue_dir (очередь boost-бандлов на шаре, "
+                 "напр. \\\\10.10.10.50\\шара\\intake\\pending).")
+    projects = Path(cfg.get("gsa_projects_dir", ""))
+    if not projects.is_dir():
+        sys.exit(f"Папка проектов GSA не найдена: {projects} (gsa_projects_dir).")
+    done = Path(cfg.get("intake_imported_dir") or (queue.parent / "imported"))
+    dry = getattr(args, "dry_run", False)
+
+    prjs = sorted(queue.glob("*.prj"))
+    if not prjs:
+        print("Очередь boost пуста — импортировать нечего.")
+        return
+    exts = (".targets", ".articles", ".articles_idx")
+    imported = []
+    for prj in prjs:
+        mates = [prj] + [queue / (prj.stem + e) for e in exts]
+        mates = [m for m in mates if m.exists()]
+        print(f"  {'(dry) ' if dry else '+ '}{prj.stem}  [{', '.join(m.suffix for m in mates)}]")
+        if dry:
+            continue
+        for m in mates:
+            shutil.copy2(m, projects / m.name)          # в папку проектов GSA
+        done.mkdir(parents=True, exist_ok=True)
+        for m in mates:
+            shutil.move(str(m), str(done / m.name))     # из очереди → imported (не повторять)
+        imported.append(prj.stem)
+
+    if dry:
+        print(f"[dry-run] импортировали бы {len(prjs)} проект(ов); refresh не звал.")
+        return
+    print(f"✓ импортировано {len(imported)} проект(ов) в {projects}")
+    if imported:
+        from lib import ui
+        ok = ui.refresh(cfg, logging.getLogger("gsa_checker"))
+        print(f"ui.refresh: {'ok' if ok else 'не подтверждён'} — GSA подхватывает новые проекты.")
+
+
 AUTOPILOT_JOURNAL = DATA_DIR / "gsa_autopilot.jsonl"
 
 
@@ -1774,6 +1820,8 @@ def main() -> None:
                     help="анкор (повторяемый; --create; в Anchor_Text, GSA крутит ≈ поровну)")
     ap.add_argument("--links-per-day", type=int, default=0,
                     help="лимит ссылок/день (--create; пауза проекта после N сабмишенов)")
+    ap.add_argument("--import-boost", action="store_true",
+                    help="импорт boost-бандлов из очереди в живой GSA + ui.refresh (нода)")
     ap.add_argument("--ui-check", action="store_true",
                     help="диагностика окна GSA (pywinauto) → data/ui_controls.txt")
     ap.add_argument("--ui-refresh", action="store_true",
@@ -1834,6 +1882,9 @@ def main() -> None:
         return
     if args.create:
         cmd_create(cfg, args)
+        return
+    if args.import_boost:
+        cmd_import_boost(cfg, args)
         return
     if args.ui_check:
         from lib import ui
