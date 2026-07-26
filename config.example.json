@@ -87,6 +87,11 @@
   "agent_bind": "127.0.0.1:8787",
   "agent_actions": {"respin-dry": ["--respin", "--only", "Split", "--dry-run"]},
 
+  "intake_token": "REPLACE_WITH_STRONG_RANDOM_TOKEN",
+  "intake_bind": "127.0.0.1:8791",
+  "intake_out_dir": "\\\\SHARE-HOST\\share\\intake\\pending",
+  "intake_template": "\\\\SHARE-HOST\\share\\Spin-generator\\templates\\template.prj",
+
   "stats_snapshots": true,
   "eta_window_min": 180,
   "stats_retention_days": 30,
