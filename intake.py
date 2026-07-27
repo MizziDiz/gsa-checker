@@ -31,6 +31,7 @@ import argparse
 import hmac
 import json
 import logging
+import os
 import subprocess
 import sys
 import time
@@ -50,6 +51,18 @@ log = logging.getLogger("gsa_intake")
 MAX_ANCHORS = 8
 MAX_LINKS_PER_DAY = 1000
 DEFAULT_TEMPLATE = "/srv/share/Spin-generator/templates/template.prj"
+
+# Кастомные регионы для заявок (поверх split1404 SUMMARY_ORDER) — объединения/переименования:
+#   «Африка» = Южная Африка + Другие страны Африки (две базы объединяются в .targets);
+#   «Европа» ← Другие страны Европы; «Азия» ← Другие страны Азии.
+CUSTOM_REGIONS: dict[str, list[str]] = {
+    "Африка": ["africa.txt", "Other-Africa.txt"],
+    "Европа": ["Europe-Other.txt"],
+    "Азия":   ["Asia-other.txt"],
+}
+# нормализованные имена SUMMARY_ORDER, заменённые кастомными (убираем из /api/countries)
+HIDDEN_REGIONS = {"южная африка", "другие страны африки",
+                  "другие страны европы", "другие страны азии"}
 
 
 def load_config() -> dict:
@@ -108,30 +121,42 @@ def _region_map() -> dict[str, str]:
             if f != buckets.NOT_STATED_FILE}
 
 
-def country_bucket(cfg: dict, country: str) -> str | None:
-    """Русский регион ('Индонезия'/'Латинская Америка'/'Польша') → путь к файлу-бакету.
-    Фолбэк — англ. имя страны через resolve_country. None, если не сопоставлено."""
+def region_files(cfg: dict, country: str) -> list[str]:
+    """Регион (рус.) → список путей к файлам-бакетам (>1 у объединённых, напр. «Африка»).
+    Приоритет: кастомные (CUSTOM_REGIONS) → split1404 SUMMARY_ORDER → англ. имя страны.
+    [] если не сопоставлено."""
     from lib import buckets
     bdir = Path(cfg.get("buckets_dir") or (DATA_DIR / "out_country_buckets"))
-    fname = _region_map().get(_norm_region(country))
-    if not fname:  # фолбэк: английское имя страны
-        f = buckets.bucket_for_country(buckets.resolve_country(country))
-        fname = f if f and f != buckets.NOT_STATED_FILE else None
-    if not fname:
-        return None
-    p = bdir / fname
-    return str(p) if p.is_file() else None
+    key = _norm_region(country)
+    files: list[str] | None = None
+    for disp, fs in CUSTOM_REGIONS.items():
+        if _norm_region(disp) == key:
+            files = fs
+            break
+    if files is None:
+        f = _region_map().get(key)                              # split1404
+        if not f:
+            g = buckets.bucket_for_country(buckets.resolve_country(country))  # англ. фолбэк
+            f = g if g and g != buckets.NOT_STATED_FILE else None
+        files = [f] if f else []
+    return [str(bdir / f) for f in files if (bdir / f).is_file()]
 
 
 def valid_countries(cfg: dict) -> list[str]:
-    """Русские названия регионов (как в split1404) для существующих бакетов — что шлёт Антон."""
+    """Русские названия регионов для заявок: split1404 (минус заменённые) + кастомные."""
     from lib import buckets
     bdir = Path(cfg.get("buckets_dir") or (DATA_DIR / "out_country_buckets"))
     out = []
     for f, label in buckets.SUMMARY_ORDER:
         if f == buckets.NOT_STATED_FILE or not (bdir / f).is_file():
             continue
-        out.append(label.split(" ", 1)[1] if " " in label else label)  # без эмодзи
+        name = label.split(" ", 1)[1] if " " in label else label   # без эмодзи
+        if _norm_region(name) in HIDDEN_REGIONS:
+            continue                                                # заменён кастомным
+        out.append(name)
+    for disp, fs in CUSTOM_REGIONS.items():
+        if any((bdir / f).is_file() for f in fs):
+            out.append(disp)
     return out
 
 
@@ -144,10 +169,10 @@ def validate_task(cfg: dict, body: dict) -> tuple[dict, list[str]]:
         errors.append("url: нужен http(s)://…")
 
     country = str(body.get("country", "")).strip()
-    bucket = country_bucket(cfg, country) if country else None
+    blist = region_files(cfg, country) if country else []
     if not country:
         errors.append("country: обязателен")
-    elif not bucket:
+    elif not blist:
         errors.append(f"country: '{country}' не сопоставлен с базой (см. GET /api/countries)")
 
     anchors = body.get("anchors")
@@ -169,7 +194,7 @@ def validate_task(cfg: dict, body: dict) -> tuple[dict, list[str]]:
 
     if errors:
         return {}, errors
-    return {"url": url, "country": country, "bucket": bucket,
+    return {"url": url, "country": country, "buckets": blist,
             "anchors": anchors, "links_per_day": lpd}, []
 
 
@@ -183,10 +208,27 @@ def build_project(cfg: dict, task: dict) -> tuple[bool, str, str]:
     project = f"boost - {_safe_label(task['url'])} - {task['country']}"
     out_dir = cfg.get("intake_out_dir") or "/srv/share/intake/pending"
     template = cfg.get("intake_template") or cfg.get("gsa_template_prj") or DEFAULT_TEMPLATE
+    buckets_ = task["buckets"]
+    tmp = None
+    if len(buckets_) == 1:
+        targets_arg = buckets_[0]
+    else:  # объединить несколько баз в один temp .targets (дедуп) — напр. «Африка»
+        import tempfile
+        seen, lines = set(), []
+        for bp in buckets_:
+            for ln in Path(bp).read_text(encoding="utf-8", errors="replace").splitlines():
+                ln = ln.strip()
+                if ln and ln not in seen:
+                    seen.add(ln)
+                    lines.append(ln)
+        tf = tempfile.NamedTemporaryFile("w", suffix=".targets", delete=False, encoding="utf-8")
+        tf.write("\n".join(lines))
+        tf.close()
+        targets_arg = tmp = tf.name
     argv = [sys.executable, str(ROOT / "gsa_checker.py"), "--create",
             "--name", project, "--url", task["url"],
             "--links-per-day", str(task["links_per_day"]),
-            "--targets", task["bucket"], "--template", template,
+            "--targets", targets_arg, "--template", template,
             "--out", out_dir, "--force"]
     for a in task["anchors"]:
         argv += ["--anchor", a]
@@ -194,6 +236,12 @@ def build_project(cfg: dict, task: dict) -> tuple[bool, str, str]:
         r = subprocess.run(argv, capture_output=True, text=True, timeout=300)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return False, project, f"create не запущен: {exc}"
+    finally:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
     if r.returncode != 0:
         return False, project, (r.stderr or r.stdout or "create rc!=0").strip()[-500:]
     return True, project, (r.stdout or "").strip()[-500:]
