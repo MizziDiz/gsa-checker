@@ -13,6 +13,8 @@ from __future__ import annotations
 import os
 import re
 
+from lib import iso2
+
 NOT_STATED_FILE = "Not Stated.txt"
 
 
@@ -261,8 +263,77 @@ def bucket_for_country(country_key: str) -> str:
 
 
 def all_bucket_files() -> set:
-    """Все файлы базы, которые должны существовать."""
-    return set(COUNTRY_FILES.values()) | set(REGION_FILES.values()) | {NOT_STATED_FILE}
+    """Все файлы базы, которые должны существовать (включая страны-члены сплита)."""
+    return (set(COUNTRY_FILES.values()) | set(REGION_FILES.values())
+            | MEMBER_FILES | {NOT_STATED_FILE})
+
+
+# ====== СПЛИТ СМЕШАННЫХ ГРУПП ПО ccTLD (Фаза B) ======
+# Групповые бакеты, которые дробим на страны по ccTLD; остаток (gTLD/vanity) — сам файл.
+SPLIT_GROUP_FILES = {
+    "Europe-Other.txt", "latam.txt", "arabic.txt", "sng.txt",
+    "china-mix.txt", "Asia-other.txt", "Other-Africa.txt", "africa.txt",
+}
+# vanity/generic ccTLD — НЕ гео-сигнал (продаются как generic): в остаток, как gTLD.
+VANITY_TLDS = {
+    "ws", "nu", "li", "io", "me", "tv", "cc", "co", "gl", "sh", "ai", "to",
+    "cx", "ac", "tk", "ml", "ga", "cf", "gq", "st", "su", "fm", "vg",
+}
+_TLD_RE = re.compile(r"https?://([^/:]+)", re.I)
+
+
+def cctld_of(url: str) -> str:
+    """Двухбуквенный страновой ccTLD из URL/host; '' для gTLD/vanity/не-ccTLD."""
+    m = _TLD_RE.search(url or "")
+    host = m.group(1) if m else (url or "")
+    tld = host.rsplit(".", 1)[-1].lower()
+    if len(tld) == 2 and tld.isalpha() and tld not in VANITY_TLDS:
+        return tld
+    return ""
+
+
+def _country_file_name(country_name: str) -> str:
+    """Имя файла-бакета для выделенной страны: 'Dominican Republic' -> 'Dominican Republic.txt'."""
+    safe = "".join(c for c in country_name if c.isalnum() or c in " -").strip()
+    return f"{safe}.txt" if safe else NOT_STATED_FILE
+
+
+def bucket_for_url(url: str, country_name: str) -> str:
+    """Бакет для verified-ссылки (Фаза B): ccTLD → файл страны (для смешанных групп —
+    отдельный файл-член); gTLD/vanity → по имени страны (остаток группы или свой файл).
+    Fallback на bucket_for_country(country_name), если ccTLD не даёт страну."""
+    tld = cctld_of(url)
+    if tld:
+        name = iso2.name_for(tld)
+        if name:
+            grp = bucket_for_country(resolve_country(name))
+            if grp in SPLIT_GROUP_FILES:
+                return _country_file_name(name)     # выделенная страна-член
+            if grp != NOT_STATED_FILE:
+                return grp                            # свой/одиночный файл (France, Korea…)
+    return bucket_for_country(resolve_country(country_name))
+
+
+def _build_group_members():
+    """group_file -> {member_file,…} по iso2: страны, чьи ccTLD попадают в сплит-группу."""
+    members: dict[str, set] = {}
+    for code, name in iso2.ISO2_TO_NAME.items():
+        if code in VANITY_TLDS:
+            continue
+        grp = bucket_for_country(resolve_country(name))
+        if grp in SPLIT_GROUP_FILES:
+            members.setdefault(grp, set()).add(_country_file_name(name))
+    return members
+
+
+GROUP_MEMBERS = _build_group_members()               # групповой остаток -> файлы-члены
+MEMBER_FILES = {f for fs in GROUP_MEMBERS.values() for f in fs}
+MEMBER_TO_GROUP = {m: g for g, fs in GROUP_MEMBERS.items() for m in fs}
+
+
+def group_total(group_file: str, counts: dict) -> int:
+    """ВСЕГО по группе = остаток + все страны-члены (для сводки/дашборда)."""
+    return counts.get(group_file, 0) + sum(counts.get(m, 0) for m in GROUP_MEMBERS.get(group_file, ()))
 
 
 def read_membership(out_dir):

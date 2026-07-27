@@ -443,14 +443,22 @@ def _kpi_report(cfg: dict, added: dict):
     kpi = cfg.get("kpi_targets") or []
     if not kpi:
         return None
+    from lib import buckets as _B
     rows = []
+    tracked = []                                  # target<=0: отслеживаем без цели
     tot_t = tot_a = tot_s = 0
     for g in kpi:
         tgt = int(g.get("target", 0) or 0)
         bks = as_list(g.get("buckets", []))
-        got = sum(int(added.get(b, 0)) for b in bks)
+        # прирост группы = сам бакет + страны-члены сплита
+        got = sum(int(added.get(b, 0)) + sum(int(added.get(m, 0))
+                  for m in _B.GROUP_MEMBERS.get(b, ())) for b in bks)
+        label = g.get("label", "?")
+        if tgt <= 0:                              # новая группа без цели — не в недоборе
+            tracked.append((got, label))
+            continue
         short = max(0, tgt - got)
-        rows.append((short, g.get("label", "?"), got, tgt))
+        rows.append((short, label, got, tgt))
         tot_t += tgt
         tot_a += got
         tot_s += short
@@ -459,7 +467,12 @@ def _kpi_report(cfg: dict, added: dict):
              for s, label, got, tgt in rows]
     head = (f"🎯 <b>Недобор по KPI</b> ({telegram_label(cfg)})\n"
             f"добрано {tot_a}/{tot_t}, суммарный недобор <b>{tot_s}</b>\n\n")
-    return head + "\n".join(lines)
+    out = head + "\n".join(lines)
+    if tracked:                                   # без цели — отдельным блоком, без /0
+        tracked.sort(key=lambda r: -r[0])
+        out += ("\n\n<i>отслеживается (цель не задана):</i>\n"
+                + "\n".join(f"➕ {label}: +{got}" for got, label in tracked))
+    return out
 
 
 def _collection_status(cfg: dict):
@@ -539,8 +552,8 @@ def cmd_report(cfg: dict, args) -> None:
 
     # текущая база: множества URL для дедупа + счётчики «было»
     per_file, global_set = buckets.read_membership(bdir)
-    pre = {fn: buckets.count_nonempty_lines(bdir / fn) for fn, _ in buckets.SUMMARY_ORDER}
-    pre[buckets.NOT_STATED_FILE] = buckets.count_nonempty_lines(bdir / buckets.NOT_STATED_FILE)
+    # «было» по ВСЕМ файлам базы (включая страны-члены сплита), не только строки сводки
+    pre = {fn: buckets.count_nonempty_lines(bdir / fn) for fn in buckets.all_bucket_files()}
 
     # GeoIP по IP для оставшихся «Not Stated» — опционально
     geo = None
@@ -564,7 +577,7 @@ def cmd_report(cfg: dict, args) -> None:
             skip_empty += 1
             continue
         nonempty += 1
-        bucket = buckets.bucket_for_country(buckets.resolve_country(country_name))
+        bucket = buckets.bucket_for_url(url_raw, country_name)   # ccTLD→страна, gTLD→остаток
         if bucket == buckets.NOT_STATED_FILE and geo and ip_str:
             from lib import geoip
             name = geoip.country_name_by_ip(ip_str, geo["db"], geo["cache"])
@@ -615,8 +628,7 @@ def cmd_report(cfg: dict, args) -> None:
     post = dict(pre)
     for fn, n in added.items():
         post[fn] = post.get(fn, 0) + n
-    total_lines = sum(post.get(fn, 0) for fn, _ in buckets.SUMMARY_ORDER)
-    total_lines += post.get(buckets.NOT_STATED_FILE, 0)
+    total_lines = sum(post.get(fn, 0) for fn in buckets.all_bucket_files())
 
     # сводка формата debug_summary (split1404)
     head = (f"Всего строк verified: {total_rows}\n"
@@ -627,7 +639,9 @@ def cmd_report(cfg: dict, args) -> None:
             f"Пропущено (дубликат в текущем запуске): {skip_dup}\n"
             f"Пропущено (пустой URL): {skip_empty}\n"
             f"GeoIP-добор Not Stated: {filled}\n")
-    body_lines = [f"{label} {post.get(fn, 0)} {buckets.fmt_added(added.get(fn, 0))}"
+    def _grp_added(fn):   # прирост группы = остаток + все страны-члены
+        return added.get(fn, 0) + sum(added.get(m, 0) for m in buckets.GROUP_MEMBERS.get(fn, ()))
+    body_lines = [f"{label} {buckets.group_total(fn, post)} {buckets.fmt_added(_grp_added(fn))}"
                   for fn, label in buckets.SUMMARY_ORDER]
     ns_line = (f"Не указано {post.get(buckets.NOT_STATED_FILE, 0)} "
                f"{buckets.fmt_added(added.get(buckets.NOT_STATED_FILE, 0))}")
