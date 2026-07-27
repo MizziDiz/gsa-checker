@@ -233,6 +233,7 @@ h1{font-size:clamp(24px,4.4vw,34px); line-height:1.1; margin:0 0 6px; text-wrap:
 .grp .tgt{font-size:11.5px; color:var(--faint);}
 
 .seg{display:inline-flex; border:1px solid var(--border); border-radius:8px; overflow:hidden;}
+.seg.kpimode{margin-top:12px;}
 .seg button{background:var(--surface); border:0; padding:5px 11px; font-size:12px; color:var(--muted); cursor:pointer;}
 .seg button.on{background:var(--accent-soft); color:var(--accent); font-weight:700;}
 
@@ -314,35 +315,42 @@ document.querySelectorAll(".panel.collapsible .panel-head").forEach(h=>{
 
 /* ---- hero + KPI ---- */
 const T = D.totals;
-$("#hero").innerHTML = `
-  <div class="tile accent"><div class="lbl">Прирост за неделю</div>
-    <div class="big num">+${fnum(T.added)}</div><div class="cap">новых записей по всем регионам</div></div>
-  <div class="tile"><div class="lbl">Выполнение плана</div>
-    <div class="big num">${fnum(T.kpi_added)}<span> / ${fnum(T.kpi_target)}</span></div>
-    <div class="cap">${T.kpi_added>=T.kpi_target?("план перевыполнен на "+Math.round((T.kpi_added/T.kpi_target-1)*100)+"%"):(Math.round(T.kpi_added/T.kpi_target*100)+"% плана")}</div></div>
-  <div class="tile"><div class="lbl">Групп в плане</div>
-    <div class="big num">${T.groups_closed}<span> / ${T.groups_total}</span> ${T.groups_closed===T.groups_total?'<span style="color:var(--good);font-size:26px">✓</span>':''}</div>
-    <div class="cap">${T.groups_closed===T.groups_total?"все группы закрыты":(T.groups_total-T.groups_closed)+" не закрыто"}</div></div>`;
+let mode = store.get("kpimode","new");        // режим KPI: 'old' | 'new'
+const M = ()=>D.modes[mode];
 
-const planPct = Math.min(T.kpi_target/Math.max(T.kpi_added,T.kpi_target)*100,100);
-$("#kpiPanel").innerHTML = `
-  <div class="kpi-top"><div class="kpi-big num">${fnum(T.kpi_added)} <span>/ ${fnum(T.kpi_target)} план</span></div>
-    <div class="kpi-pct">${Math.round(T.kpi_added/T.kpi_target*100)}% · ${T.kpi_added>=T.kpi_target?"+":""}${fnum(T.kpi_added-T.kpi_target)}</div></div>
-  <div class="track"><div class="fill" id="kfill"></div><div class="plan-tick" style="left:${planPct.toFixed(0)}%"></div></div>
-  <div class="kpi-legend"><span>0</span><span>план ${fnum(T.kpi_target)}</span><span class="num">факт ${fnum(T.kpi_added)}</span></div>
-  <div class="kpi-extra"><span>Групп закрыто: <b class="num">${T.groups_closed} / ${T.groups_total}</b></span>
-    <span>Целевых регионов: <b class="num">${T.targets}</b></span>
-    <span>${T.kpi_added>=T.kpi_target?"Сверх плана":"Недобор"}: <b class="num">${T.kpi_added>=T.kpi_target?"+":""}${fnum(T.kpi_added-T.kpi_target)}</b></span></div>`;
-requestAnimationFrame(()=>{ const f=$("#kfill");
-  if(matchMedia("(prefers-reduced-motion: reduce)").matches) f.style.transition="none";
-  setTimeout(()=>{ f.style.width="100%"; },60); });
-
-/* ---- KPI по группам ---- */
-$("#groups").innerHTML = D.groups.map(g=>{ const [flag,name,fact,tgt]=g, done=fact>=tgt;
-  return `<div class="grp ${done?'done':'miss'}"><div class="g"><span class="flag">${flag}</span>${name}</div>
-    <div class="r"><span class="fact num">+${fact}</span><span class="st">${done?'✓':fact+'/'+tgt}</span></div>
-    <div class="tgt num">план ${tgt} · ${done?('+'+(fact-tgt)+' сверх'):('−'+(tgt-fact)+' недобор')}</div></div>`;
-}).join("");
+function renderKPI(){
+  const m=M(), pct=m.target?Math.round(m.added/m.target*100):0;
+  $("#hero").innerHTML = `
+    <div class="tile accent"><div class="lbl">Прирост за неделю</div>
+      <div class="big num">+${fnum(T.added)}</div><div class="cap">новых записей по всем регионам</div></div>
+    <div class="tile"><div class="lbl">Выполнение плана · ${mode==="old"?"старый":"новый"} KPI</div>
+      <div class="big num">${fnum(m.added)}<span> / ${fnum(m.target)}</span></div>
+      <div class="cap">${m.added>=m.target?("план перевыполнен на "+(m.target?Math.round((m.added/m.target-1)*100):0)+"%"):(pct+"% плана")}</div></div>
+    <div class="tile"><div class="lbl">Групп в плане</div>
+      <div class="big num">${m.closed}<span> / ${m.total}</span> ${m.closed===m.total?'<span style="color:var(--good);font-size:26px">✓</span>':''}</div>
+      <div class="cap">${m.closed===m.total?"все группы закрыты":(m.total-m.closed)+" не закрыто"}</div></div>`;
+  const planPct = Math.min(m.target/Math.max(m.added,m.target||1)*100,100);
+  $("#kpiPanel").innerHTML = `
+    <div class="kpi-top"><div class="kpi-big num">${fnum(m.added)} <span>/ ${fnum(m.target)} план</span></div>
+      <div class="kpi-pct">${pct}% · ${m.added>=m.target?"+":""}${fnum(m.added-m.target)}</div></div>
+    <div class="track"><div class="fill" id="kfill"></div><div class="plan-tick" style="left:${planPct.toFixed(0)}%"></div></div>
+    <div class="kpi-legend"><span>0</span><span>план ${fnum(m.target)}</span><span class="num">факт ${fnum(m.added)}</span></div>
+    <div class="kpi-extra"><span>Групп закрыто: <b class="num">${m.closed} / ${m.total}</b></span>
+      <span>Целевых регионов: <b class="num">${m.targeted}</b></span>
+      <span>${m.added>=m.target?"Сверх плана":"Недобор"}: <b class="num">${m.added>=m.target?"+":""}${fnum(m.added-m.target)}</b></span></div>`;
+  requestAnimationFrame(()=>{ const f=$("#kfill"); if(f){
+    if(matchMedia("(prefers-reduced-motion: reduce)").matches) f.style.transition="none";
+    setTimeout(()=>{ f.style.width="100%"; },60); }});
+  $("#groups").innerHTML = m.groups.map(g=>{ const [flag,name,fact,tgt]=g, notgt=tgt<=0, done=fact>=tgt;
+    return `<div class="grp ${notgt?'':(done?'done':'miss')}"><div class="g"><span class="flag">${flag}</span>${name}</div>
+      <div class="r"><span class="fact num">+${fact}</span><span class="st">${notgt?'—':(done?'✓':fact+'/'+tgt)}</span></div>
+      <div class="tgt num">${notgt?'без цели':('план '+tgt+' · '+(done?('+'+(fact-tgt)+' сверх'):('−'+(tgt-fact)+' недобор')))}</div></div>`;
+  }).join("");
+  document.querySelectorAll("#kpimodeSeg button").forEach(b=>b.classList.toggle("on",b.dataset.m===mode));
+}
+renderKPI();
+document.querySelectorAll("#kpimodeSeg button").forEach(b=>b.addEventListener("click",()=>{
+  mode=b.dataset.m; store.set("kpimode",mode); renderKPI(); renderGeo(); }));
 
 /* ---- таблица «прирост по гео»: сортировка + выделение + фильтр ---- */
 let sortKey=store.get("gsort","delta"), sortDir=store.get("gdir",-1);
@@ -350,17 +358,18 @@ let filt=store.get("gfilt","all");
 let sel=new Set(store.get("gsel",[]));
 const expanded=new Set();   // раскрытые группы (страны-члены)
 const cols={geo:1,total:2,delta:3};
+const TGT = r => mode==="old" ? r[4] : r[5];   // флаг «цель» для текущего режима
 function renderGeo(){
   let rows=D.geo.slice();
-  if(filt==="tgt") rows=rows.filter(r=>r[4]);
+  if(filt==="tgt") rows=rows.filter(TGT);
   const maxD=Math.max(1,...rows.map(r=>r[3]));
   rows.sort((a,b)=>{ let x,y;
     if(sortKey==="geo"){x=a[1].toLowerCase();y=b[1].toLowerCase(); return (x<y?-1:x>y?1:0)*sortDir;}
     x=a[cols[sortKey]]; y=b[cols[sortKey]]; return (x-y)*sortDir; });
-  $("#geoRows").innerHTML = rows.map(r=>{ const [flag,name,total,delta,tgt]=r;
+  $("#geoRows").innerHTML = rows.map(r=>{ const [flag,name,total,delta]=r, tgt=TGT(r);
     const bw=delta>0?Math.max(4,Math.round(delta/maxD*100)):0;
     const chip=tgt?'<span class="chip tgt">цель</span>':'<span class="chip non">—</span>';
-    const mem=(D.members||{})[name];
+    const mem=mode==="new"?(D.members||{})[name]:null;   // в старом режиме регионы не дробим
     const open=expanded.has(name);
     const caret=mem?`<span class="exp" data-exp="${name}">${open?'▾':'▸'}</span>`:'<span class="exp-none"></span>';
     let out=`<tr data-g="${name}" class="${sel.has(name)?'sel':''}${mem?' grpline':''}">
@@ -437,24 +446,39 @@ function esc(s){ return String(s).replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",
 """
 
 
-def render_html(cfg, totals, reports, member_added=None):
+def render_html(cfg, totals, reports, member_added=None, kpi_modes=None):
     latest = reports[-1] if reports else None
     member_added = member_added or {}
     report_added = {f: a for f, (t, a) in (latest or {}).get("per_file", {}).items()}
     # сайдкар (органика+добор, пофайлово) авторитетнее отчёта-файла (только группы), если есть
     added_by_file = dict(member_added) if member_added else report_added
-    kpi = compute_kpi(cfg.get("kpi_targets", []), added_by_file)
-    kpi_added = sum(r["added"] for r in kpi)
-    kpi_target = sum(r["target"] for r in kpi)
     total = sum(totals.values())  # живая сумма бакетов
     added_week = sum(added_by_file.values()) if added_by_file else (
         latest["added_total"] if latest else 0)
     week_date = latest["date"] if latest else "—"
     servers = generic_servers(latest["servers"]) if latest else "—"
-    kpi_files = {f for kt in cfg.get("kpi_targets", []) for f in kt["buckets"]}
+
+    # два режима KPI (старый/новый); без файла режимов — оба = текущий конфиг
+    fallback = cfg.get("kpi_targets", [])
+    modes_cfg = kpi_modes or {"old": fallback, "new": fallback}
+
+    def mode_data(kt_list):
+        kpi = compute_kpi(kt_list, added_by_file)
+        files = sorted({f for kt in kt_list for f in kt["buckets"]})
+        return {
+            "groups": [[*split_label(r["label"]), r["added"], r["target"]] for r in kpi],
+            "added": sum(r["added"] for r in kpi if r["target"] > 0),  # только целевые
+            "target": sum(r["target"] for r in kpi),
+            "closed": sum(1 for r in kpi if r["target"] > 0 and r["added"] >= r["target"]),
+            "total": sum(1 for r in kpi if r["target"] > 0),
+            "targeted": len(files), "files": files,
+        }
+    m_old = mode_data(modes_cfg.get("old", fallback))
+    m_new = mode_data(modes_cfg.get("new", fallback))
+    old_files, new_files = set(m_old["files"]), set(m_new["files"])
 
     geo = []
-    members_map = {}      # имя группы -> [[flag,name,total,delta],…] для раскрытия
+    members_map = {}      # имя группы -> [[flag,name,total,delta],…] для раскрытия (новый режим)
     for fname, label in list(B.SUMMARY_ORDER) + [(B.NOT_STATED_FILE, "🏳 Не указано")]:
         flag, name = split_label(label)
         if fname in B.GROUP_MEMBERS:                      # смешанная группа → агрегируем
@@ -472,25 +496,16 @@ def render_html(cfg, totals, reports, member_added=None):
                 mem.append(["🌐", "прочие (gTLD/vanity)", res, int(member_added.get(fname, 0))])
             mem.sort(key=lambda x: -x[2])
             members_map[name] = mem
-            geo.append([flag, name, g_total, g_added, fname in kpi_files])
+            geo.append([flag, name, g_total, g_added, fname in old_files, fname in new_files])
         else:
             geo.append([flag, name, totals.get(fname, 0), added_by_file.get(fname, 0),
-                        fname in kpi_files])
-    groups = []
-    for r in kpi:
-        flag, name = split_label(r["label"])
-        groups.append([flag, name, r["added"], r["target"]])
+                        fname in old_files, fname in new_files])
 
     gen = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M %Z")
     data = {
-        "geo": geo, "groups": groups, "members": members_map, "week": week_date, "gen": gen,
-        "totals": {
-            "base": total, "added": added_week,
-            "kpi_added": kpi_added, "kpi_target": kpi_target,
-            "groups_closed": sum(1 for r in kpi if r["target"] > 0 and r["added"] >= r["target"]),
-            "groups_total": sum(1 for r in kpi if r["target"] > 0),
-            "targets": sum(1 for g in geo if g[4]),
-        },
+        "geo": geo, "members": members_map, "week": week_date, "gen": gen,
+        "modes": {"old": m_old, "new": m_new},
+        "totals": {"base": total, "added": added_week},
     }
     data_json = json.dumps(data, ensure_ascii=False)
     n_src = len([x for x in servers.split(",") if "Источник" in x]) or "—"
@@ -512,6 +527,7 @@ def render_html(cfg, totals, reports, member_added=None):
     <p class="sub">Данные за неделю: {esc(week_date)} · источников: {esc(n_src)}</p>
     <div class="servers"><span><span class="dot">●</span> {esc(servers)}</span>
       <span>Всего в базе: <b class="num">{total:,}</b></span></div>
+    <div class="seg kpimode" id="kpimodeSeg"><button data-m="old">Старый KPI</button><button data-m="new">Новый KPI</button></div>
   </header>
 
   <section class="hero" id="hero"></section>
@@ -555,8 +571,9 @@ def render_html(cfg, totals, reports, member_added=None):
   </section>
 
   <div class="foot">
-    <div class="note"><b>Целевые / нецелевые.</b> План считается по {len(kpi)} группам целевых регионов
-      (план {kpi_target}). Крупные нецелевые регионы в план не входят, хотя пополняют базу.</div>
+    <div class="note"><b>Целевые / нецелевые.</b> Переключатель «Старый / Новый KPI» вверху меняет
+      состав целей, выполнение и (в старом режиме) не дробит регионы по странам. Крупные нецелевые
+      регионы в план не входят, хотя пополняют базу.</div>
     <div class="meta-line">Обновлено {esc(gen)}</div>
   </div>
 </div>
@@ -585,10 +602,18 @@ def main():
                 member_added = json.loads(sc.read_text(encoding="utf-8")).get("added", {})
             except (OSError, json.JSONDecodeError):
                 pass
+    # режимы KPI (старый/новый) из kpi_modes.json рядом с базой
+    kpi_modes = None
+    km = buckets_dir.parent / "kpi_modes.json"
+    if km.exists():
+        try:
+            kpi_modes = json.loads(km.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            pass
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "index.html").write_text(
-        render_html(cfg, totals, reports, member_added), encoding="utf-8")
+        render_html(cfg, totals, reports, member_added, kpi_modes), encoding="utf-8")
     print(f"OK: {out_dir/'index.html'}  (регионов: {len(totals)}, отчётов: {len(reports)}, "
           f"сумма базы: {sum(totals.values())})")
 
