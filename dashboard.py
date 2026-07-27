@@ -106,8 +106,8 @@ def parse_all_reports(report_dir: Path) -> list:
     return reps
 
 
-def compute_kpi(kpi_targets: list, latest: dict) -> list:
-    added_by_file = {f: a for f, (t, a) in (latest or {}).get("per_file", {}).items()}
+def compute_kpi(kpi_targets: list, added_by_file: dict) -> list:
+    added_by_file = added_by_file or {}
     rows = []
     for kt in kpi_targets:
         # прирост группы = сам бакет + страны-члены сплита
@@ -439,17 +439,20 @@ function esc(s){ return String(s).replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",
 
 def render_html(cfg, totals, reports, member_added=None):
     latest = reports[-1] if reports else None
-    kpi = compute_kpi(cfg.get("kpi_targets", []), latest)
+    member_added = member_added or {}
+    report_added = {f: a for f, (t, a) in (latest or {}).get("per_file", {}).items()}
+    # сайдкар (органика+добор, пофайлово) авторитетнее отчёта-файла (только группы), если есть
+    added_by_file = dict(member_added) if member_added else report_added
+    kpi = compute_kpi(cfg.get("kpi_targets", []), added_by_file)
     kpi_added = sum(r["added"] for r in kpi)
     kpi_target = sum(r["target"] for r in kpi)
     total = sum(totals.values())  # живая сумма бакетов
-    added_week = latest["added_total"] if latest else 0
+    added_week = sum(added_by_file.values()) if added_by_file else (
+        latest["added_total"] if latest else 0)
     week_date = latest["date"] if latest else "—"
     servers = generic_servers(latest["servers"]) if latest else "—"
-    added_by_file = {f: a for f, (t, a) in (latest or {}).get("per_file", {}).items()}
     kpi_files = {f for kt in cfg.get("kpi_targets", []) for f in kt["buckets"]}
 
-    member_added = member_added or {}
     geo = []
     members_map = {}      # имя группы -> [[flag,name,total,delta],…] для раскрытия
     for fname, label in list(B.SUMMARY_ORDER) + [(B.NOT_STATED_FILE, "🏳 Не указано")]:
