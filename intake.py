@@ -13,9 +13,11 @@ GSA-проект (через `gsa_checker.py --create`: URL + анкоры + л�
   • bind по умолчанию 127.0.0.1 (наружу — через Cloudflare Tunnel/VPN с сильным токеном).
   • аудит в data/intake_audit.jsonl.
 
-Заявка (POST /api/tasks):
+Заявка (POST /api/tasks) — один объект ИЛИ массив (батч):
   {"url":"https://site/", "country":"Poland",
    "anchors":["a1","a2","a3","a4"], "links_per_day":10}
+После обработки запроса шлётся ОДИН отчёт в Telegram (список проектов ✅/❌+код,
+тег intake_report_mention для ручного refresh GSA).
 
 Эндпоинты:
   GET  /health                 -> {ok}                              (без токена)
@@ -258,6 +260,68 @@ def build_project(cfg: dict, task: dict) -> tuple[bool, str, str]:
     return True, project, (r.stdout or "").strip()[-500:]
 
 
+def _tg_send(cfg: dict, text: str) -> bool:
+    """Плоская отправка в Telegram (без parse_mode — @упоминания и ссылки авто-линкуются)."""
+    bt = cfg.get("telegram_bot_token")
+    chat = cfg.get("intake_report_chat_id") or cfg.get("telegram_chat_id")
+    if not (bt and chat):
+        return False
+    import urllib.error
+    import urllib.request
+    url = f"https://api.telegram.org/bot{bt}/sendMessage"
+    data = json.dumps({"chat_id": chat, "text": text,
+                       "disable_web_page_preview": True}).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST",
+                                 headers={"Content-Type": "application/json"})
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        return True
+    except (urllib.error.URLError, OSError) as exc:
+        log.warning("intake: отчёт в Telegram не ушёл: %s", exc)
+        return False
+
+
+def build_report(records: list[dict], mention: str = "") -> str:
+    """Один отчёт на запрос: список проектов с ✅/❌+код; тег для ручного refresh."""
+    n = len(records)
+    ok = sum(1 for r in records if r["status"] == "queued")
+    head = f"🤖 intake · заявка обработана: {n} проект(ов) — ✅ {ok}"
+    if ok < n:
+        head += f" / ⚠ {n - ok}"
+    lines = [head]
+    for r in records:
+        if r["status"] == "queued":
+            lines.append(f"✅ {r['url']} → {r['country']}  ({r['task_id']})")
+        else:
+            tail = f"{r.get('code') or ''} {(r.get('error') or '')[:90]}".strip()
+            lines.append(f"❌ {r['url']} → {r.get('country') or '?'} — {tail}")
+    if ok and mention.strip():
+        lines.append(f"\n{mention.strip()} — проекты добавлены, нужен ручной refresh GSA (gsa-02).")
+    return "\n".join(lines)
+
+
+def _process_one(cfg: dict, body, src_ip: str) -> dict:
+    """Валидирует + создаёт один проект; сохраняет запись и аудит. → запись результата."""
+    task_id = "t_" + uuid.uuid4().hex[:10]
+    clean, errors = validate_task(cfg, body if isinstance(body, dict) else {})
+    if errors:
+        b = body if isinstance(body, dict) else {}
+        rec = {"task_id": task_id, "ts": int(time.time()), "url": str(b.get("url", "")),
+               "country": str(b.get("country", "")), "status": "invalid", "code": 400,
+               "error": "; ".join(errors), "project": None, "from": src_ip}
+    else:
+        ok, project, msg = build_project(cfg, clean)
+        rec = {"task_id": task_id, "ts": int(time.time()), "url": clean["url"],
+               "country": clean["country"], "anchors": clean["anchors"],
+               "links_per_day": clean["links_per_day"], "project": project,
+               "status": "queued" if ok else "error", "code": None if ok else 500,
+               "error": None if ok else msg, "note": msg, "from": src_ip}
+    _save_task(rec)
+    _audit({"event": "task", "task_id": task_id, "status": rec["status"],
+            "project": rec.get("project"), "from": src_ip})
+    return rec
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "gsa-intake/1"
     cfg: dict = {}
@@ -312,31 +376,37 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": "not found"})
             return
         try:
-            length = min(int(self.headers.get("Content-Length", 0)), 20_000)
+            length = min(int(self.headers.get("Content-Length", 0)), 200_000)
             body = json.loads(self.rfile.read(length) or b"{}")
         except (ValueError, json.JSONDecodeError):
             self._send(400, {"error": "bad json"})
             return
 
-        clean, errors = validate_task(self.cfg, body)
-        if errors:
-            self._send(400, {"error": "validation", "detail": errors})
+        batch = isinstance(body, list)          # заявка может быть одна (dict) или пачкой (list)
+        tasks = body if batch else [body]
+        if not tasks or len(tasks) > 100:
+            self._send(400, {"error": "нужно 1..100 задач"})
             return
 
-        task_id = "t_" + uuid.uuid4().hex[:10]
-        ok, project, msg = build_project(self.cfg, clean)
-        rec = {"task_id": task_id, "ts": int(time.time()),
-               "url": clean["url"], "country": clean["country"],
-               "anchors": clean["anchors"], "links_per_day": clean["links_per_day"],
-               "project": project, "status": "queued" if ok else "error",
-               "note": msg, "from": self.client_address[0]}
-        _save_task(rec)
-        _audit({"event": "task", "task_id": task_id, "project": project,
-                "ok": ok, "from": self.client_address[0]})
-        if not ok:
-            self._send(500, {"task_id": task_id, "status": "error", "error": msg})
+        records = [_process_one(self.cfg, t, self.client_address[0]) for t in tasks]
+        if self.cfg.get("intake_report", True):     # один отчёт на весь запрос
+            _tg_send(self.cfg, build_report(records, str(self.cfg.get("intake_report_mention", ""))))
+
+        if batch:
+            self._send(200, {
+                "queued": sum(1 for r in records if r["status"] == "queued"),
+                "errors": sum(1 for r in records if r["status"] != "queued"),
+                "results": [{"task_id": r["task_id"], "status": r["status"],
+                             "project": r.get("project"), "error": r.get("error")} for r in records]})
             return
-        self._send(202, {"task_id": task_id, "status": "queued", "project": project})
+        r = records[0]
+        code = {"queued": 202, "invalid": 400}.get(r["status"], 500)
+        out = {"task_id": r["task_id"], "status": r["status"]}
+        if r["status"] == "queued":
+            out["project"] = r["project"]
+        else:
+            out["error"] = r["error"]
+        self._send(code, out)
 
 
 def main() -> None:

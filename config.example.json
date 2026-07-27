@@ -95,6 +95,8 @@
   "intake_bind": "127.0.0.1:8791",
   "intake_out_dir": "\\\\SHARE-HOST\\share\\intake\\pending",
   "intake_template": "\\\\SHARE-HOST\\share\\Spin-generator\\templates\\template.prj",
+  "intake_report": true,
+  "intake_report_mention": "@your_telegram_username",
 
   "stats_snapshots": true,
   "eta_window_min": 180,

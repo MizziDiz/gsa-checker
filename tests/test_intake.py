@@ -74,3 +74,18 @@ def test_rejects_bad(tmp_path):
 
 def test_safe_label():
     assert intake._safe_label("https://Money-Site.com/path") == "Money-Site.com"
+
+
+def test_build_report():
+    recs = [
+        {"status": "queued", "url": "https://a/", "country": "Польша", "task_id": "t_1"},
+        {"status": "error", "url": "https://b/", "country": "Азия", "code": 500, "error": "boom"},
+        {"status": "invalid", "url": "https://c/", "country": "", "code": 400, "error": "country"},
+    ]
+    msg = intake.build_report(recs, mention="@ruslan")
+    assert "3 проект(ов)" in msg and "✅ 1" in msg
+    assert "✅ https://a/ → Польша  (t_1)" in msg
+    assert "❌ https://b/" in msg and "500" in msg
+    assert "@ruslan" in msg and "refresh" in msg.lower()
+    # без успехов — без тега
+    assert "@ruslan" not in intake.build_report([recs[1]], mention="@ruslan")
