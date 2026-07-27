@@ -664,6 +664,12 @@ def cmd_report(cfg: dict, args) -> None:
     if not dry:
         rep.write_text(summary, encoding="utf-8")
         print(f"✓ отчёт: {rep}")
+        # сайдкар для дашборда: пофайловый прирост (в т.ч. по странам-членам сплита)
+        # — отчёт-файл хранит только уровень групп, а сайту нужны детали для раскрытия.
+        detail = {"added": {k: int(v) for k, v in added.items() if v},
+                  "totals": {k: int(post.get(k, 0)) for k in buckets.all_bucket_files()}}
+        rep.with_suffix(".detail.json").write_text(
+            json.dumps(detail, ensure_ascii=False), encoding="utf-8")
 
     # KPI-текст считаем всегда (для консоли), но ОТПРАВКУ в Telegram — только в боевом
     # прогоне: --dry-run ничего наружу не шлёт.

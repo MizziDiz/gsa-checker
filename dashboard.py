@@ -12,13 +12,30 @@
 
   python3 dashboard.py            # -> ./site/index.html
 """
-import argparse, html, json, re, sys
+import argparse
+import html
+import json
+import re
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 from lib import buckets as B  # noqa: E402
+from lib import iso2  # noqa: E402
+
+# имя страны -> ISO2 (для флага-эмодзи стран-членов при раскрытии группы)
+_NAME_TO_CODE = {name: code for code, name in iso2.ISO2_TO_NAME.items()
+                 if len(code) == 2 and code.isalpha()}
+
+
+def _flag(country_name: str) -> str:
+    code = _NAME_TO_CODE.get(country_name, "")
+    if len(code) == 2:
+        return "".join(chr(0x1F1E6 + ord(c) - 97) for c in code)
+    return "🏳"
+
 
 CONFIG_PATH = ROOT / "data" / "gsa_checker.config.json"
 DEFAULTS_PATH = ROOT / "dashboard.defaults.json"  # несекретный fallback (без токенов)
@@ -44,12 +61,9 @@ def load_config() -> dict:
 
 
 def bucket_totals(buckets_dir: Path) -> dict:
-    """file -> число непустых строк (накопленный объём)."""
-    out = {}
-    for fname, _label in B.SUMMARY_ORDER:
-        out[fname] = B.count_nonempty_lines(buckets_dir / fname)
-    out[B.NOT_STATED_FILE] = B.count_nonempty_lines(buckets_dir / B.NOT_STATED_FILE)
-    return out
+    """file -> число непустых строк (накопленный объём), по ВСЕМ файлам (вкл. страны-члены)."""
+    return {fname: B.count_nonempty_lines(buckets_dir / fname)
+            for fname in B.all_bucket_files()}
 
 
 def parse_report(path: Path) -> dict:
@@ -95,7 +109,9 @@ def compute_kpi(kpi_targets: list, latest: dict) -> list:
     added_by_file = {f: a for f, (t, a) in (latest or {}).get("per_file", {}).items()}
     rows = []
     for kt in kpi_targets:
-        added = sum(added_by_file.get(f, 0) for f in kt["buckets"])
+        # прирост группы = сам бакет + страны-члены сплита
+        added = sum(added_by_file.get(f, 0) + sum(added_by_file.get(m, 0)
+                    for m in B.GROUP_MEMBERS.get(f, ())) for f in kt["buckets"])
         target = kt["target"]
         rows.append({"label": kt["label"], "target": target, "added": added,
                      "buckets": kt["buckets"], "deficit": max(target - added, 0)})
@@ -242,6 +258,15 @@ td.n{text-align:right; white-space:nowrap;}
 .delta{font-weight:700;} .delta.pos{color:var(--good);} .delta.zero{color:var(--faint);}
 .dbar-wrap{min-width:96px;}
 .dbar{display:inline-block; height:7px; border-radius:3px; background:var(--bar); vertical-align:middle; opacity:.85;}
+.exp{display:inline-block; width:14px; cursor:pointer; color:var(--muted); font-size:11px; user-select:none; text-align:center;}
+.exp:hover{color:var(--ink);}
+.exp-none{display:inline-block; width:14px;}
+tr.grp .gname{font-weight:650;}
+tr.memrow{background:var(--accent-soft);}
+tr.memrow td{padding-top:4px; padding-bottom:4px;}
+.geo.mem{padding-left:22px;}
+.geo.mem .gname{color:var(--muted); font-size:12.5px;}
+.geo.mem .flag{opacity:.9;}
 
 .cmt-form{display:flex; flex-direction:column; gap:8px; margin-bottom:14px;}
 .cmt-row{display:flex; gap:8px; flex-wrap:wrap;}
@@ -322,6 +347,7 @@ $("#groups").innerHTML = D.groups.map(g=>{ const [flag,name,fact,tgt]=g, done=fa
 let sortKey=store.get("gsort","delta"), sortDir=store.get("gdir",-1);
 let filt=store.get("gfilt","all");
 let sel=new Set(store.get("gsel",[]));
+const expanded=new Set();   // раскрытые группы (страны-члены)
 const cols={geo:1,total:2,delta:3};
 function renderGeo(){
   let rows=D.geo.slice();
@@ -333,11 +359,21 @@ function renderGeo(){
   $("#geoRows").innerHTML = rows.map(r=>{ const [flag,name,total,delta,tgt]=r;
     const bw=delta>0?Math.max(4,Math.round(delta/maxD*100)):0;
     const chip=tgt?'<span class="chip tgt">цель</span>':'<span class="chip non">—</span>';
-    return `<tr data-g="${name}" class="${sel.has(name)?'sel':''}">
-      <td><div class="geo"><span class="flag">${flag}</span><span class="gname">${name}</span>${chip}</div></td>
+    const mem=(D.members||{})[name];
+    const open=expanded.has(name);
+    const caret=mem?`<span class="exp" data-exp="${name}">${open?'▾':'▸'}</span>`:'<span class="exp-none"></span>';
+    let out=`<tr data-g="${name}" class="${sel.has(name)?'sel':''}${mem?' grp':''}">
+      <td><div class="geo">${caret}<span class="flag">${flag}</span><span class="gname">${name}</span>${chip}</div></td>
       <td class="n num">${fnum(total)}</td>
       <td class="n"><span class="delta ${delta>0?'pos':'zero'}">${delta>0?'+'+delta:'—'}</span></td>
-      <td class="dbar-wrap"><span class="dbar" style="width:${bw}%"></span></td></tr>`; }).join("");
+      <td class="dbar-wrap"><span class="dbar" style="width:${bw}%"></span></td></tr>`;
+    if(mem) out+=mem.map(m=>{ const [mf,mn,mt,md]=m;
+      return `<tr class="memrow" data-parent="${name}"${open?'':' hidden'}>
+        <td><div class="geo mem"><span class="flag">${mf}</span><span class="gname">${mn}</span></div></td>
+        <td class="n num">${fnum(mt)}</td>
+        <td class="n"><span class="delta ${md>0?'pos':'zero'}">${md>0?'+'+md:'—'}</span></td>
+        <td></td></tr>`; }).join("");
+    return out; }).join("");
   document.querySelectorAll("#geoTable th.s").forEach(th=>{
     const k=th.dataset.k, on=k===sortKey; th.classList.toggle("act",on);
     th.querySelector(".ind").textContent = on ? (sortDir<0?"▼":"▲") : "";
@@ -350,7 +386,11 @@ document.querySelectorAll("#geoTable th.s").forEach(th=>{
   th.tabIndex=0; th.addEventListener("click",set);
   th.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){e.preventDefault();set();} });
 });
-$("#geoRows").addEventListener("click",e=>{ const tr=e.target.closest("tr"); if(!tr)return;
+$("#geoRows").addEventListener("click",e=>{
+  const ex=e.target.closest(".exp");
+  if(ex){ const g=ex.dataset.exp; if(expanded.has(g))expanded.delete(g); else expanded.add(g);
+    renderGeo(); return; }
+  const tr=e.target.closest("tr"); if(!tr||tr.classList.contains("memrow"))return;
   const g=tr.dataset.g; if(sel.has(g))sel.delete(g); else sel.add(g);
   store.set("gsel",[...sel]); tr.classList.toggle("sel"); });
 document.querySelectorAll("#geoFilter button").forEach(b=>b.addEventListener("click",()=>{
@@ -396,7 +436,7 @@ function esc(s){ return String(s).replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",
 """
 
 
-def render_html(cfg, totals, reports):
+def render_html(cfg, totals, reports, member_added=None):
     latest = reports[-1] if reports else None
     kpi = compute_kpi(cfg.get("kpi_targets", []), latest)
     kpi_added = sum(r["added"] for r in kpi)
@@ -408,11 +448,30 @@ def render_html(cfg, totals, reports):
     added_by_file = {f: a for f, (t, a) in (latest or {}).get("per_file", {}).items()}
     kpi_files = {f for kt in cfg.get("kpi_targets", []) for f in kt["buckets"]}
 
+    member_added = member_added or {}
     geo = []
+    members_map = {}      # имя группы -> [[flag,name,total,delta],…] для раскрытия
     for fname, label in list(B.SUMMARY_ORDER) + [(B.NOT_STATED_FILE, "🏳 Не указано")]:
         flag, name = split_label(label)
-        geo.append([flag, name, totals.get(fname, 0), added_by_file.get(fname, 0),
-                    fname in kpi_files])
+        if fname in B.GROUP_MEMBERS:                      # смешанная группа → агрегируем
+            g_total = B.group_total(fname, totals)
+            g_added = added_by_file.get(fname, 0) + sum(added_by_file.get(m, 0)
+                                                        for m in B.GROUP_MEMBERS[fname])
+            mem = []
+            for mf in B.GROUP_MEMBERS[fname]:
+                mt = totals.get(mf, 0)
+                if mt:
+                    cname = mf[:-4]
+                    mem.append([_flag(cname), cname, mt, int(member_added.get(mf, 0))])
+            res = totals.get(fname, 0)
+            if res:
+                mem.append(["🌐", "прочие (gTLD/vanity)", res, int(member_added.get(fname, 0))])
+            mem.sort(key=lambda x: -x[2])
+            members_map[name] = mem
+            geo.append([flag, name, g_total, g_added, fname in kpi_files])
+        else:
+            geo.append([flag, name, totals.get(fname, 0), added_by_file.get(fname, 0),
+                        fname in kpi_files])
     groups = []
     for r in kpi:
         flag, name = split_label(r["label"])
@@ -420,12 +479,12 @@ def render_html(cfg, totals, reports):
 
     gen = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M %Z")
     data = {
-        "geo": geo, "groups": groups, "week": week_date, "gen": gen,
+        "geo": geo, "groups": groups, "members": members_map, "week": week_date, "gen": gen,
         "totals": {
             "base": total, "added": added_week,
             "kpi_added": kpi_added, "kpi_target": kpi_target,
-            "groups_closed": sum(1 for r in kpi if r["added"] >= r["target"]),
-            "groups_total": len(kpi),
+            "groups_closed": sum(1 for r in kpi if r["target"] > 0 and r["added"] >= r["target"]),
+            "groups_total": sum(1 for r in kpi if r["target"] > 0),
             "targets": sum(1 for g in geo if g[4]),
         },
     }
@@ -513,9 +572,19 @@ def main():
     report_dir = Path(cfg["report_out_dir"])
     totals = bucket_totals(buckets_dir)
     reports = parse_all_reports(report_dir)
+    # сайдкар последнего отчёта: пофайловый прирост (для раскрытия групп на страны)
+    member_added = {}
+    if reports:
+        sc = Path(reports[-1]["path"]).with_suffix(".detail.json")
+        if sc.exists():
+            try:
+                member_added = json.loads(sc.read_text(encoding="utf-8")).get("added", {})
+            except (OSError, json.JSONDecodeError):
+                pass
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "index.html").write_text(render_html(cfg, totals, reports), encoding="utf-8")
+    (out_dir / "index.html").write_text(
+        render_html(cfg, totals, reports, member_added), encoding="utf-8")
     print(f"OK: {out_dir/'index.html'}  (регионов: {len(totals)}, отчётов: {len(reports)}, "
           f"сумма базы: {sum(totals.values())})")
 
