@@ -50,6 +50,16 @@ def test_english_fallback(tmp_path):
     assert not errors and clean["buckets"][0].endswith("Poland.txt")
 
 
+def test_english_aliases_and_stem(tmp_path):
+    cfg = _cfg(tmp_path)
+    al = intake.english_aliases(cfg)
+    assert "Poland" in al and "africa" in al             # стемы файлов-бакетов
+    # английский стем резолвится (в один файл, без объединения «Африки»)
+    clean, errors = intake.validate_task(cfg, {
+        "url": "https://x/", "country": "africa", "anchors": ["a"], "links_per_day": 5})
+    assert not errors and len(clean["buckets"]) == 1 and clean["buckets"][0].endswith("africa.txt")
+
+
 def test_rejects_bad(tmp_path):
     cfg = _cfg(tmp_path)
     assert intake.validate_task(cfg, {"url": "ftp://x", "country": "Польша",

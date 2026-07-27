@@ -19,7 +19,7 @@ GSA-проект (через `gsa_checker.py --create`: URL + анкоры + л�
 
 Эндпоинты:
   GET  /health                 -> {ok}                              (без токена)
-  GET  /api/countries          -> [валидные значения country]        (токен)
+  GET  /api/countries          -> {regions:[рус], english_fallback:[англ]}  (токен)
   POST /api/tasks              -> {task_id, status, project}         (токен)
   GET  /api/tasks/<id>         -> статус заявки                       (токен)
   GET  /api/tasks              -> последние заявки                    (токен)
@@ -134,12 +134,23 @@ def region_files(cfg: dict, country: str) -> list[str]:
             files = fs
             break
     if files is None:
-        f = _region_map().get(key)                              # split1404
-        if not f:
-            g = buckets.bucket_for_country(buckets.resolve_country(country))  # англ. фолбэк
+        f = _region_map().get(key)                              # split1404 (рус.)
+        if not f:  # английское имя файла-бакета (стем): latam/USA/china-mix/…
+            f = {p.stem.lower(): p.name for p in bdir.glob("*.txt")}.get(key)
+        if not f:  # англ. имя страны через resolve_country
+            g = buckets.bucket_for_country(buckets.resolve_country(country))
             f = g if g and g != buckets.NOT_STATED_FILE else None
         files = [f] if f else []
     return [str(bdir / f) for f in files if (bdir / f).is_file()]
+
+
+def english_aliases(cfg: dict) -> list[str]:
+    """Английские имена (стемы файлов-бакетов) — фолбэк-варианты для country."""
+    from lib import buckets
+    bdir = Path(cfg.get("buckets_dir") or (DATA_DIR / "out_country_buckets"))
+    if not bdir.is_dir():
+        return []
+    return sorted(p.name[:-4] for p in bdir.glob("*.txt") if p.name != buckets.NOT_STATED_FILE)
 
 
 def valid_countries(cfg: dict) -> list[str]:
@@ -280,7 +291,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(401, {"error": "unauthorized"})
             return
         if path == "/api/countries":
-            self._send(200, valid_countries(self.cfg))
+            self._send(200, {"regions": valid_countries(self.cfg),
+                             "english_fallback": english_aliases(self.cfg)})
         elif path == "/api/tasks":
             self._send(200, _read_tasks()[-50:])
         elif path.startswith("/api/tasks/"):
