@@ -125,7 +125,7 @@ SUMMARY_ORDER = [
     ("Germany.txt",      "🇩🇪 Германия"),
     ("brazil.txt",       "🇧🇷 Бразилия"),
     ("australia.txt",    "🇦🇺 Австралия"),
-    ("africa.txt",       "🇿🇦 Южная Африка"),
+    ("africa.txt",       "🌍 Африка"),
     ("arabic.txt",       "🌍 Арабские страны"),
     ("France.txt",       "🇫🇷 Франция"),
     ("Spain.txt",        "🇪🇸 Испания"),

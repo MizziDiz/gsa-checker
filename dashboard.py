@@ -46,6 +46,7 @@ NOT_STATED_LABEL = "Не указано"
 # label -> bucket file (из SUMMARY_ORDER) + Not Stated
 LABEL_TO_FILE = {label: fname for fname, label in B.SUMMARY_ORDER}
 LABEL_TO_FILE[NOT_STATED_LABEL] = B.NOT_STATED_FILE
+LABEL_TO_FILE["🇿🇦 Южная Африка"] = "africa.txt"   # алиас: старые отчёты до переименования в «Африка»
 
 
 def load_config() -> dict:
