@@ -262,7 +262,7 @@ td.n{text-align:right; white-space:nowrap;}
 .exp{display:inline-block; width:14px; cursor:pointer; color:var(--muted); font-size:11px; user-select:none; text-align:center;}
 .exp:hover{color:var(--ink);}
 .exp-none{display:inline-block; width:14px;}
-tr.grp .gname{font-weight:650;}
+tr.grpline .gname{font-weight:650;}
 tr.memrow{background:var(--accent-soft);}
 tr.memrow td{padding-top:4px; padding-bottom:4px;}
 .geo.mem{padding-left:22px;}
@@ -363,7 +363,7 @@ function renderGeo(){
     const mem=(D.members||{})[name];
     const open=expanded.has(name);
     const caret=mem?`<span class="exp" data-exp="${name}">${open?'▾':'▸'}</span>`:'<span class="exp-none"></span>';
-    let out=`<tr data-g="${name}" class="${sel.has(name)?'sel':''}${mem?' grp':''}">
+    let out=`<tr data-g="${name}" class="${sel.has(name)?'sel':''}${mem?' grpline':''}">
       <td><div class="geo">${caret}<span class="flag">${flag}</span><span class="gname">${name}</span>${chip}</div></td>
       <td class="n num">${fnum(total)}</td>
       <td class="n"><span class="delta ${delta>0?'pos':'zero'}">${delta>0?'+'+delta:'—'}</span></td>
