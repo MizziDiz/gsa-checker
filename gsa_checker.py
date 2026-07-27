@@ -1126,7 +1126,7 @@ def cmd_create(cfg: dict, args) -> None:
     if n_art:
         art_out = out_dir / f"{args.name}.articles"
         art_out.write_text(_art.generate_articles(
-            args.keywords or "", args.anchor or [], args.url or "", n_art), encoding="utf-8")
+            kws_val or args.anchor or [], args.anchor or [], args.url or "", n_art), encoding="utf-8")
         print(f"  {art_out.name}  ({n_art} статей)")
     print("Импортируйте папку/файлы в GSA (или скопируйте в gsa_projects_dir).")
 

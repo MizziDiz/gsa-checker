@@ -74,6 +74,16 @@ def test_rejects_bad(tmp_path):
 
 def test_safe_label():
     assert intake._safe_label("https://Money-Site.com/path") == "Money-Site.com"
+    # кириллица в хосте (IDN) не должна попасть в ASCII-имя проекта
+    assert intake._safe_label("https://сайт.рф/x").isascii()
+
+
+def test_ascii_country_from_bucket():
+    # русское имя региона в имя проекта не идёт — берём ASCII-стем бакета
+    assert intake._ascii_country({"buckets": ["/x/Malaysia.txt"]}) == "Malaysia"
+    assert intake._ascii_country({"buckets": ["/x/africa.txt", "/x/Other-Africa.txt"]}) == "africa"
+    assert intake._ascii_country({"buckets": []}) == "geo"
+    assert intake._ascii_country({"buckets": ["/x/Malaysia.txt"]}).isascii()
 
 
 def test_build_report():
@@ -89,3 +99,15 @@ def test_build_report():
     assert "@ruslan" in msg and "refresh" in msg.lower()
     # без успехов — без тега
     assert "@ruslan" not in intake.build_report([recs[1]], mention="@ruslan")
+
+
+def test_authed_non_ascii_header():
+    """Не-ASCII в Authorization не должен ронять поток (compare_digest со str падал)."""
+    def _authed(token, header):
+        h = type("H", (), {"token": token,
+                           "headers": {"Authorization": header}})()
+        return intake.Handler._authed(h)
+    assert _authed("secret-token", "Bearer тест-кириллица") is False   # раньше — TypeError
+    assert _authed("secret-token", "Bearer secret-token") is True
+    assert _authed("secret-token", "Bearer wrong") is False
+    assert _authed("", "Bearer secret-token") is False

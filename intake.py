@@ -213,12 +213,24 @@ def validate_task(cfg: dict, body: dict) -> tuple[dict, list[str]]:
 
 def _safe_label(url: str) -> str:
     host = (urlparse(url).netloc or "site").replace(":", "_")
-    return "".join(c for c in host if c.isalnum() or c in ".-_") or "site"
+    # только ASCII: GSA не переваривает кириллицу в имени проекта → показывает пустым
+    return "".join(c for c in host if (c.isalnum() and c.isascii()) or c in ".-_") or "site"
+
+
+def _ascii_country(task: dict) -> str:
+    """ASCII-метка страны для имени проекта: стем файла-бакета (Malaysia.txt→Malaysia;
+    у объединённых — первый). Русское имя региона в имя проекта не попадает."""
+    for bp in task.get("buckets") or []:
+        stem = "".join(c for c in Path(bp).stem
+                       if (c.isalnum() and c.isascii()) or c in ".-_ ").strip()
+        if stem:
+            return stem
+    return "geo"
 
 
 def build_project(cfg: dict, task: dict) -> tuple[bool, str, str]:
     """Зовёт gsa_checker.py --create фикс. argv. → (ok, project_name, message)."""
-    project = f"boost - {_safe_label(task['url'])} - {task['country']}"
+    project = f"boost - {_safe_label(task['url'])} - {_ascii_country(task)}"
     out_dir = cfg.get("intake_out_dir") or "/srv/share/intake/pending"
     template = cfg.get("intake_template") or cfg.get("gsa_template_prj") or DEFAULT_TEMPLATE
     buckets_ = task["buckets"]
@@ -343,7 +355,9 @@ class Handler(BaseHTTPRequestHandler):
             return False
         got = self.headers.get("Authorization", "")
         got = got[7:] if got.startswith("Bearer ") else ""
-        return bool(got) and hmac.compare_digest(got, self.token)
+        # сравниваем в байтах: compare_digest со str падает на не-ASCII (роняет поток запроса)
+        return bool(got) and hmac.compare_digest(got.encode("utf-8", "surrogatepass"),
+                                                 self.token.encode("utf-8", "surrogatepass"))
 
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
