@@ -11,18 +11,26 @@ def _cfg(tmp_path):
     return {"buckets_dir": str(tmp_path)}
 
 
-def test_valid_countries(tmp_path):
-    assert "Poland" in intake.valid_countries(_cfg(tmp_path))
+def test_valid_countries_russian(tmp_path):
+    # /api/countries отдаёт русские названия регионов (как в split1404)
+    assert "Польша" in intake.valid_countries(_cfg(tmp_path))
 
 
-def test_validate_ok(tmp_path):
+def test_validate_russian_region(tmp_path):
     clean, errors = intake.validate_task(_cfg(tmp_path), {
-        "url": "https://money-site.com/", "country": "Poland",
+        "url": "https://money-site.com/", "country": "Польша",
         "anchors": ["a1", "a2", "a3", "a4"], "links_per_day": 10})
     assert not errors
-    assert clean["links_per_day"] == 10
-    assert clean["bucket"].endswith(".txt")
+    assert clean["bucket"].endswith("Poland.txt")
     assert len(clean["anchors"]) == 4
+
+
+def test_validate_english_fallback(tmp_path):
+    # английское имя тоже принимается (фолбэк)
+    clean, errors = intake.validate_task(_cfg(tmp_path), {
+        "url": "https://money-site.com/", "country": "Poland",
+        "anchors": ["a1"], "links_per_day": 10})
+    assert not errors and clean["bucket"].endswith("Poland.txt")
 
 
 def test_validate_rejects_bad(tmp_path):

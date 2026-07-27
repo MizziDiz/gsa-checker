@@ -93,25 +93,46 @@ def _read_tasks() -> list[dict]:
     return out
 
 
+def _norm_region(s: str) -> str:
+    """Нормализация имени региона: срезать ведущие эмодзи/символы, lower, strip."""
+    s = str(s or "").strip().lower()
+    while s and not s[0].isalpha():
+        s = s[1:].lstrip()
+    return s
+
+
+def _region_map() -> dict[str, str]:
+    """Русское имя региона (как в split1404 SUMMARY_ORDER) → имя файла-бакета."""
+    from lib import buckets
+    return {_norm_region(label): f for f, label in buckets.SUMMARY_ORDER
+            if f != buckets.NOT_STATED_FILE}
+
+
 def country_bucket(cfg: dict, country: str) -> str | None:
-    """country ('Poland'/'brazil'/'latam'…) → путь к файлу-бакету базы или None."""
+    """Русский регион ('Индонезия'/'Латинская Америка'/'Польша') → путь к файлу-бакету.
+    Фолбэк — англ. имя страны через resolve_country. None, если не сопоставлено."""
     from lib import buckets
     bdir = Path(cfg.get("buckets_dir") or (DATA_DIR / "out_country_buckets"))
-    fname = buckets.bucket_for_country(buckets.resolve_country(country))
-    if not fname or fname == buckets.NOT_STATED_FILE:
+    fname = _region_map().get(_norm_region(country))
+    if not fname:  # фолбэк: английское имя страны
+        f = buckets.bucket_for_country(buckets.resolve_country(country))
+        fname = f if f and f != buckets.NOT_STATED_FILE else None
+    if not fname:
         return None
     p = bdir / fname
     return str(p) if p.is_file() else None
 
 
 def valid_countries(cfg: dict) -> list[str]:
-    """Имена доступных стран (по существующим файлам-бакетам, без Not Stated)."""
+    """Русские названия регионов (как в split1404) для существующих бакетов — что шлёт Антон."""
     from lib import buckets
     bdir = Path(cfg.get("buckets_dir") or (DATA_DIR / "out_country_buckets"))
-    if not bdir.is_dir():
-        return []
-    ns = buckets.NOT_STATED_FILE
-    return sorted(p.name[:-4] for p in bdir.glob("*.txt") if p.name != ns)
+    out = []
+    for f, label in buckets.SUMMARY_ORDER:
+        if f == buckets.NOT_STATED_FILE or not (bdir / f).is_file():
+            continue
+        out.append(label.split(" ", 1)[1] if " " in label else label)  # без эмодзи
+    return out
 
 
 def validate_task(cfg: dict, body: dict) -> tuple[dict, list[str]]:
