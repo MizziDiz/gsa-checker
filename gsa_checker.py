@@ -1023,10 +1023,22 @@ def _read_targets(src: Path, limit: int) -> list[str]:
     return out
 
 
+# boost-обогащение полей [data_value]: что шаффлить (спин), что заменять (статичные заголовки/описания)
+BOOST_SPIN_FIELDS = ["Image_Comment", "Guestbook_Comment", "Guestbook_Comment_(German)",
+                     "About_Yourself", "Forum_Comment", "Blog_Comment", "Forum_Subject",
+                     "signature", "Image_Subject"]
+BOOST_TITLE_FIELDS = ["Website_title", "Website_title_(German)", "Guestbook_title",
+                      "Guestbook_title_(German)", "Contact_Name"]
+BOOST_DESC_FIELDS = ["Description_250", "Description_450", "Description_250_(German)",
+                     "Description_450_(German)", "Description_250_(Polish)", "Description_450_(Polish)"]
+
+
 def cmd_create(cfg: dict, args) -> None:
-    """Собирает готовый к импорту проект GSA: <name>.prj из шаблона (URL/Keywords) +
-    <name>.targets из батча целей. Не трогает живой GSA — пишет в отдельную папку."""
+    """Собирает готовый к импорту boost-проект GSA: <name>.prj из шаблона (URL/Keywords/
+    анкоры/лимит) + catch-all почта + шаффл спинтакса и замена статичных текст-полей +
+    <name>.articles (генератор статей). Живой GSA не трогает — пишет в отдельную папку."""
     from lib.prj import Prj
+    from lib import articles as _art, emails as _em, spin as _spin
 
     if not args.name:
         sys.exit("Нужно --name (имя проекта).")
@@ -1049,8 +1061,10 @@ def cmd_create(cfg: dict, args) -> None:
     if args.url:
         prj.set_value("data_value", "URL", args.url)
         changed.append("URL")
-    if args.keywords:
-        prj.set_value("data_value", "Keywords", args.keywords)
+    # Keywords: из --keywords, иначе из анкоров (чтобы не остались из шаблона)
+    kws_val = args.keywords or (", ".join(args.anchor) if getattr(args, "anchor", None) else "")
+    if kws_val:
+        prj.set_value("data_value", "Keywords", kws_val)
         changed.append("Keywords")
     if getattr(args, "anchor", None):
         # анкоры — по строке (литеральный \n в .prj); GSA крутит список ≈ поровну
@@ -1063,6 +1077,28 @@ def cmd_create(cfg: dict, args) -> None:
         prj.set_value("Options", "pause project minutes", "1440")
         changed.append(f"лимит {args.links_per_day}/день")
 
+    # boost-обогащение: шаффл спинтакса (уникальность) + замена статичных полей + catch-all почта
+    kw = kws_val.split(",")[0].strip() if kws_val else ""
+    for key in BOOST_SPIN_FIELDS:
+        v = prj.get_value("data_value", key)
+        if v and _spin.has_spin(v):
+            prj.set_value("data_value", key, _spin.shuffle_spintax(v))
+    if kw:
+        for key in BOOST_TITLE_FIELDS:
+            v = prj.get_value("data_value", key)
+            if v and "%" not in v and "{" not in v:      # только статичный текст (не макрос/не спин)
+                prj.set_value("data_value", key, _art.spin_title(kw))
+        for key in BOOST_DESC_FIELDS:
+            v = prj.get_value("data_value", key)
+            if v and "%" not in v and "{" not in v:
+                prj.set_value("data_value", key, _art.spin_description(kw))
+    changed.append("спин-поля")
+    if cfg.get("email_catchall") and cfg.get("email_catchall_hex"):
+        prj.replace_section("email accounts", _em.build_catchall_lines(
+            int(cfg.get("emails_catchall_count", 1) or 1), cfg["email_catchall_hex"]))
+        prj.set_value("data_value", "your e-mail", "")
+        changed.append("catch-all почта")
+
     # .targets из батча
     targets: list[str] = []
     if args.targets:
@@ -1071,11 +1107,15 @@ def cmd_create(cfg: dict, args) -> None:
             sys.exit(f"Источник целей не найден: {src}")
         targets = _read_targets(src, int(args.limit or 0))
 
+    n_art = 0 if getattr(args, "no_articles", False) else int(
+        getattr(args, "articles", 0) or cfg.get("articles_count", 20) or 20)
+
     if args.dry_run:
         print(f"[dry-run] проект {args.name}")
         print(f"  шаблон : {template}")
         print(f"  .prj   : {prj_out}  (правки: {', '.join(changed) or 'нет'})")
         print(f"  .targets: {tgt_out}  ({len(targets):,} целей)")
+        print(f"  .articles: {n_art} статей" if n_art else "  .articles: нет")
         return
 
     prj.save(prj_out)
@@ -1083,6 +1123,11 @@ def cmd_create(cfg: dict, args) -> None:
     print(f"✓ создан проект {args.name} в {out_dir}")
     print(f"  {prj_out.name}  (правки: {', '.join(changed) or 'нет'})")
     print(f"  {tgt_out.name}  ({len(targets):,} целей)")
+    if n_art:
+        art_out = out_dir / f"{args.name}.articles"
+        art_out.write_text(_art.generate_articles(
+            args.keywords or "", args.anchor or [], args.url or "", n_art), encoding="utf-8")
+        print(f"  {art_out.name}  ({n_art} статей)")
     print("Импортируйте папку/файлы в GSA (или скопируйте в gsa_projects_dir).")
 
 
@@ -1820,6 +1865,9 @@ def main() -> None:
                     help="анкор (повторяемый; --create; в Anchor_Text, GSA крутит ≈ поровну)")
     ap.add_argument("--links-per-day", type=int, default=0,
                     help="лимит ссылок/день (--create; пауза проекта после N сабмишенов)")
+    ap.add_argument("--articles", type=int, default=0,
+                    help="кол-во статей .articles (--create; дефолт articles_count или 20)")
+    ap.add_argument("--no-articles", action="store_true", help="не генерировать .articles (--create)")
     ap.add_argument("--import-boost", action="store_true",
                     help="импорт boost-бандлов из очереди в живой GSA + ui.refresh (нода)")
     ap.add_argument("--ui-check", action="store_true",
