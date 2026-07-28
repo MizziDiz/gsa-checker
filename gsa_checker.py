@@ -1803,73 +1803,128 @@ def gsa_debug_dir(cfg: dict) -> Path | None:
     return None
 
 
+def _scan_report_text(st: dict) -> str:
+    """Полный человекочитаемый отчёт по скану (идёт в файл, не в stdout)."""
+    fmt = "%Y-%m-%d %H:%M"
+    L: list[str] = []
+    add = L.append
+    add(f"Скан debug-папки GSA: {st['dir']}")
+    add(f"Снят: {time.strftime(fmt, time.localtime(st['scanned_at']))}, "
+        f"за {st['elapsed_sec']} с")
+    add(f"Файлов: {st['files']}, прочитано тел: {st['bodies_read']}, "
+        f"ошибок чтения: {st['read_errors']}, объём: {st['total_mb']} МБ")
+    add(f"Окно: {time.strftime(fmt, time.localtime(st['first']))} — "
+        f"{time.strftime(fmt, time.localtime(st['last']))}")
+    add(f"Пустых (0 байт): {st['empty']}; медиана размера: {st['size_median_kb']} КБ; "
+        f"максимум: {st['size_max_kb']} КБ")
+    add(f"Уникальных доменов: {st['unique_hosts']}; уникальных тел (по хэшу начала): "
+        f"{st['unique_bodies']}")
+
+    def block(title: str, pairs, width: int = 6) -> None:
+        add("")
+        add(title)
+        for name, cnt in pairs:
+            add(f"  {cnt:{width}d}  {name}")
+
+    block("Причины (файл может попасть в несколько категорий):", st["signs"])
+    block("Домены с повторами:", sorted(st["host_repeat"].items()))
+    block("Топ-30 доменов по числу дампов:", st["hosts"])
+    block("Зоны (TLD):", st["tlds"])
+    block("Движки сайтов:", st["engines"])
+    block("Капчи:", st["captchas"])
+    block("Языки страниц:", st["langs"])
+    block("Расширения файлов:", st["exts"])
+    block("Частые заголовки страниц:", st["titles"])
+    block("Дампов по часам:", st["by_hour"])
+    add("")
+    add("Причины по топ-доменам:")
+    for host, reasons in st["top_host_signs"].items():
+        add(f"  {host}: " + ", ".join(f"{k} ×{v}" for k, v in reasons.items()))
+    return "\n".join(L) + "\n"
+
+
+def _write_scan_report(cfg: dict, st: dict) -> list[Path]:
+    """Кладёт подробный отчёт рядом с autopilot-статистикой (она на шаре — значит
+    отчёт видно с шары целиком, не только хвост job-лога) и в data/ ноды."""
+    name = str(cfg.get("server_name", "node"))
+    targets: list[Path] = []
+    for base in (cfg.get("autopilot_stats_dir"), str(DATA_DIR)):
+        if not base:
+            continue
+        d = Path(base)
+        if not d.is_dir():
+            continue
+        try:
+            (d / f"{name}.debug_scan.json").write_text(
+                json.dumps(st, ensure_ascii=False, indent=1), encoding="utf-8")
+            txt = d / f"{name}.debug_scan.txt"
+            txt.write_text(_scan_report_text(st), encoding="utf-8")
+            targets.append(txt)
+        except OSError as exc:
+            print(f"   ⚠ отчёт не записан в {d}: {exc}")
+    return targets
+
+
 def cmd_gsa_log(cfg: dict, args) -> None:
     """Читает debug-папку GSA SER (read-only) — то, что GSA реально сохраняет на диск:
     HTML-дампы страниц, по файлу на проблемную цель (имя = <домен>_<hex>.html).
-    Печатает листинг новейших файлов и сводку: окно времени, объём, топ-домены,
-    распознанные причины по выборке. С --mail — только дампы со следами почты
-    (регистрация/подтверждение). --lines задаёт длину листинга."""
+    Разбирает ВСЕ файлы (у каждого — «голова», размер/время из stat) и печатает
+    сжатую сводку; подробный отчёт (топ-домены, зоны, движки, капчи, языки, часы)
+    пишется файлом рядом с autopilot-статистикой на шаре и в data/ ноды.
+    С --mail — дампы со следами почты/верификации. --lines задаёт длину листинга."""
+    from lib import debugscan
+
     d = gsa_debug_dir(cfg)
     if d is None:
         print("debug-папка GSA не найдена. Стандартный путь — "
               "%APPDATA%\\GSA Search Engine Ranker\\debug; "
               "если она в другом месте, задай gsa_debug_dir в data-конфиге.")
         return
-    files = [p for p in d.iterdir() if p.is_file()]
-    if not files:
+    if not any(p.is_file() for p in d.iterdir()):
         print(f"debug-папка {d} пуста (debug-режим GSA выключен или её почистили).")
         return
 
-    stats = sorted(((p, p.stat()) for p in files), key=lambda t: t[1].st_mtime, reverse=True)
-    total_mb = sum(st.st_size for _, st in stats) / 1024 / 1024
+    st = debugscan.scan(d)
     fmt = "%Y-%m-%d %H:%M"
-    print(f"── debug-папка {d} ──")
-    print(f"   файлов: {len(stats)}, объём: {total_mb:.1f} МБ, "
-          f"свежий: {time.strftime(fmt, time.localtime(stats[0][1].st_mtime))}, "
-          f"старый: {time.strftime(fmt, time.localtime(stats[-1][1].st_mtime))}")
-    empty = sum(1 for _, st in stats if st.st_size == 0)
-    print(f"   пустых (0 байт — сайт не отдал страницу): {empty} "
-          f"({empty * 100 // len(stats)}%)")
-    exts = Counter(p.suffix.lower() or "(без расширения)" for p, _ in stats)
-    print("   расширения: " + ", ".join(f"{e} ×{n}" for e, n in exts.most_common(6)))
+    written = _write_scan_report(cfg, st)
 
-    # имя дампа = <домен>_<hex>.html; много файлов на домен = цель упорно не берётся
-    hosts = Counter(p.name.rsplit("_", 1)[0] for p, _ in stats)
-    print(f"   уникальных доменов: {len(hosts)}; топ-10 по числу дампов:")
-    for host, n in hosts.most_common(10):
-        print(f"      {n:5d}  {host}")
-
-    sample = 300
-    reasons: Counter = Counter()
-    mail_hits: list[Path] = []
-    for p, st in stats[:sample]:
-        if st.st_size == 0:
-            reasons["пусто (нет ответа)"] += 1
-            continue
-        try:
-            with p.open("rb") as f:
-                head = f.read(8000).decode("utf-8", "replace").lower()
-        except OSError:
-            continue
-        for label in {lab for needle, lab in DUMP_SIGNS if needle in head} or {"без явного признака"}:
-            reasons[label] += 1
-        if any(w in head for w in MAIL_WORDS):
-            mail_hits.append(p)
-    print(f"   признаки по выборке из {min(sample, len(stats))} новейших "
-          f"(файл может попасть в несколько категорий):")
-    for label, n in reasons.most_common(12):
-        print(f"      {n:5d}  {label}")
-
-    n = int(getattr(args, "lines", None) or 20)
     if getattr(args, "mail", False):
-        print(f"   дампов со следами почты (из выборки): {len(mail_hits)}; первые {n}:")
-        listing = [(p, p.stat()) for p in mail_hits[:n]]
-    else:
-        listing = stats[:n]
-        print(f"   новейшие {len(listing)} файлов:")
-    for p, st in listing:
-        print(f"      {time.strftime(fmt, time.localtime(st.st_mtime))}  "
-              f"{st.st_size / 1024:7.0f} КБ  {p.name}")
+        n = int(getattr(args, "lines", None) or 20)
+        hits = [(p, p.stat()) for p in sorted(d.iterdir(), key=lambda x: -x.stat().st_mtime)
+                if p.is_file() and p.stat().st_size
+                and any(w in p.open("rb").read(8000).decode("utf-8", "replace").lower()
+                        for w in MAIL_WORDS)][:n]
+        print(f"── дампы со следами почты/верификации (первые {len(hits)}) ──")
+        for p, s in hits:
+            print(f"   {time.strftime(fmt, time.localtime(s.st_mtime))}  "
+                  f"{s.st_size / 1024:7.0f} КБ  {p.name}")
+        return
+
+    # stdout держим коротким: панель показывает только хвост job-лога (4000 байт)
+    print(f"── debug-папка {d} ──")
+    print(f"   файлов: {st['files']}, объём: {st['total_mb']} МБ, разобрано за "
+          f"{st['elapsed_sec']} с, ошибок чтения: {st['read_errors']}")
+    print(f"   окно: {time.strftime(fmt, time.localtime(st['first']))} — "
+          f"{time.strftime(fmt, time.localtime(st['last']))}")
+    print(f"   пустых (сайт не ответил): {st['empty']} "
+          f"({st['empty'] * 100 // max(st['files'], 1)}%), "
+          f"медиана {st['size_median_kb']} КБ, максимум {st['size_max_kb']} КБ")
+    print(f"   доменов: {st['unique_hosts']}, уникальных тел: {st['unique_bodies']} "
+          f"(повторы: " + ", ".join(f"{k} — {v}" for k, v in sorted(st["host_repeat"].items()))
+          + ")")
+
+    def top(title: str, pairs, limit: int) -> None:
+        if pairs:
+            print(f"   {title}: " + ", ".join(f"{k} ×{v}" for k, v in pairs[:limit]))
+
+    top("причины", st["signs"], 8)
+    top("движки", st["engines"], 6)
+    top("капчи", st["captchas"], 5)
+    top("зоны", st["tlds"], 8)
+    top("языки", st["langs"], 6)
+    top("топ-доменов", st["hosts"], 6)
+    if written:
+        print("   подробный отчёт: " + ", ".join(str(p) for p in written))
     print("   ⚠ папку GSA не чистит сама — растёт бесконечно, чистить вручную.")
 
 
