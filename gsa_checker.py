@@ -1776,6 +1776,10 @@ def _tail_text(path: Path, max_bytes: int = 2 * 1024 * 1024) -> list[str]:
     return lines
 
 
+# Файлы установщика/апдейтера GSA рядом с exe: это релиз-ноутс и лог обновления,
+# к работе ноды отношения не имеют — тейлить их бессмысленно.
+SETUP_LOGS = frozenset({"change.log", "changes.log", "update.log", "install.log"})
+
 # Признаки причины неудачи в HTML-дампе GSA: подстрока в теле → человеческая метка.
 DUMP_SIGNS: tuple[tuple[str, str], ...] = (
     ("captcha", "капча"),
@@ -1877,8 +1881,7 @@ def cmd_gsa_log(cfg: dict, args) -> None:
                 dump_dirs.append((d, dumps))
             texts += here_texts
         else:
-            # changes.log — релиз-ноутс самого GSA, к работе ноды отношения не имеет
-            texts += [p for p in d.glob("*.log") if p.name.lower() != "changes.log"]
+            texts += [p for p in d.glob("*.log") if p.name.lower() not in SETUP_LOGS]
 
     # тейл лога печатаем ПЕРВЫМ: панель показывает только хвост вывода задания,
     # и сводка по дампам (самое ценное) не должна из него вытесняться.

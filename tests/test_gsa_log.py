@@ -75,10 +75,11 @@ def test_dump_summary_printed_after_log_tail(tmp_path, monkeypatch, capsys):
 
 
 def test_changes_log_is_not_treated_as_a_log(tmp_path, monkeypatch, capsys):
-    """changes.log — релиз-ноутс GSA, не лог работы."""
+    """change.log/update.log — файлы установщика GSA, не лог работы."""
     exe_dir = tmp_path / "app"
     exe_dir.mkdir()
-    (exe_dir / "changes.log").write_text("1.20 - new: first public release\n")
+    (exe_dir / "change.log").write_text("1.20 - new: first public release\n")
+    (exe_dir / "update.log").write_text("updater ran\n")
     monkeypatch.setenv("APPDATA", str(tmp_path / "nope"))
     import types as _t
     gsa_checker.cmd_gsa_log({"gsa_exe_path": str(exe_dir / "ser.exe")},
@@ -86,4 +87,5 @@ def test_changes_log_is_not_treated_as_a_log(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
 
     assert "first public release" not in out
+    assert "updater ran" not in out
     assert "Log to file" in out
