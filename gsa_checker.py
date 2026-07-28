@@ -1903,6 +1903,9 @@ def cmd_gsa_log(cfg: dict, args) -> None:
     if not dump_dirs:
         print("debug-папок с дампами не найдено "
               "(debug-режим GSA выключен или дампы лежат в другом месте).")
+    print("── источники ──")
+    print("   просмотрено папок: " + (", ".join(str(d) for d in dirs) or "нет"))
+    print("   текстовые логи: " + (", ".join(sorted(p.name for p in texts)) or "нет"))
 
 
 def _force_utf8_output() -> None:
