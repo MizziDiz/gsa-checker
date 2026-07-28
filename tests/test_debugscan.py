@@ -30,7 +30,7 @@ def test_scan_counts_everything(tmp_path):
     assert dict(st["engines"])["WordPress"] == 2
     assert dict(st["captchas"])["reCAPTCHA"] == 1
     assert dict(st["langs"])["ru"] == 2
-    assert dict(st["signs"])["требуется вход"] == 1
+    assert dict(st["login_wall"])["слово login в разметке (не преграда)"] == 2
     assert dict(st["signs"])["пусто (нет ответа)"] == 1
     assert dict(st["titles"])["Вход"] == 2
     assert st["host_repeat"] == {"1 дамп": 2, "2–4 дампа": 1}
@@ -64,3 +64,25 @@ def test_scan_survives_unreadable_file(tmp_path, monkeypatch):
 
     assert st["read_errors"] == 1
     assert st["bodies_read"] == 1
+
+
+def test_login_wall_separates_refusal_from_menu_word():
+    """Слово login в шапке ≠ отказ: три разных уровня."""
+    assert debugscan.login_wall(
+        "you must be logged in to post a comment") == "отказ: сначала вход/регистрация"
+    assert debugscan.login_wall(
+        '<form><input type="password" name="pw"></form>') == "форма входа/регистрации на странице"
+    assert debugscan.login_wall(
+        '<a href="/login">Login</a> welcome to our blog') == "слово login в разметке (не преграда)"
+    assert debugscan.login_wall("<html>just an article</html>") == "без упоминания входа"
+
+
+def test_signs_no_longer_flag_bare_login_word(tmp_path):
+    """Обычная страница со ссылкой Login не должна попадать в причины отказа."""
+    (tmp_path / "blog.ru_AA11.html").write_text(
+        "<html><a href='/login'>Login</a><p>Спасибо, комментарий добавлен</p></html>")
+
+    st = debugscan.scan(tmp_path)
+
+    assert dict(st["signs"]).get("отказ: сначала вход/регистрация") is None
+    assert dict(st["signs"])["без явного признака"] == 1

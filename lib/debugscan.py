@@ -18,6 +18,9 @@ from pathlib import Path
 HEAD_BYTES = 32_768
 
 # Признак причины неудачи: подстрока в «голове» дампа → человеческая метка.
+# ВАЖНО: сюда идут только подстроки, которые сами по себе означают отказ. Слова
+# «login»/«register» в этот список НЕ входят: на форуме и в WordPress они есть в
+# шапке любой страницы, включая успешные, — их разбирает login_wall() отдельно.
 SIGNS: tuple[tuple[str, str], ...] = (
     ("captcha", "капча"),
     ("cloudflare", "Cloudflare/WAF"),
@@ -30,14 +33,39 @@ SIGNS: tuple[tuple[str, str], ...] = (
     ("banned", "блокировка"),
     ("spam", "антиспам"),
     ("moderat", "премодерация"),
-    ("login", "требуется вход"),
-    ("sign in", "требуется вход"),
-    ("register", "требуется регистрация"),
     ("<error>", "ошибка приложения"),
     ("database error", "ошибка БД сайта"),
     ("maintenance", "техработы"),
     ("suspended", "аккаунт/домен приостановлен"),
 )
+
+# Явный отказ «сначала войди/зарегистрируйся» — фраза, а не просто слово в меню.
+LOGIN_WALL: tuple[str, ...] = (
+    "must be logged in",
+    "must be a registered",
+    "must register",
+    "please log in to",
+    "please login to",
+    "you need to login",
+    "you need to log in",
+    "login required",
+    "registration required",
+    "only registered users",
+    "members only",
+    "sign in to continue",
+    "войдите",
+    "требуется авторизац",
+    "только для зарегистрированных",
+    "необходимо зарегистрироваться",
+)
+
+# Поле пароля = на странице реально форма входа/регистрации, а не ссылка в шапке.
+PASSWORD_FIELDS: tuple[str, ...] = (
+    'type="password"', "type='password'", "type=password",
+)
+
+# Слово в разметке (шапка/меню) — сам по себе НЕ признак отказа.
+LOGIN_WORDS: tuple[str, ...] = ("login", "log in", "sign in", "register")
 
 # Движок сайта: по характерным маркерам в разметке.
 ENGINES: tuple[tuple[str, str], ...] = (
@@ -95,6 +123,22 @@ def tld_of(host: str) -> str:
     return parts[1].lower() if len(parts) == 2 else "(нет)"
 
 
+def login_wall(head: str) -> str:
+    """Насколько «вход/регистрация» на странице — реальная преграда, а не слово в меню.
+
+    Три уровня, потому что вхождение слова «login» само по себе не значит ничего:
+    оно есть в шапке почти любого форума и WordPress, в том числе на странице,
+    где постинг прошёл успешно.
+    """
+    if any(w in head for w in LOGIN_WALL):
+        return "отказ: сначала вход/регистрация"     # явная фраза-отказ
+    if any(w in head for w in PASSWORD_FIELDS):
+        return "форма входа/регистрации на странице"  # поле пароля
+    if any(w in head for w in LOGIN_WORDS):
+        return "слово login в разметке (не преграда)"
+    return "без упоминания входа"
+
+
 def scan(directory: Path, head_bytes: int = HEAD_BYTES) -> dict:
     """Полный проход по всем файлам папки. Возвращает словарь статистики."""
     started = time.time()
@@ -114,6 +158,7 @@ def scan(directory: Path, head_bytes: int = HEAD_BYTES) -> dict:
     langs: Counter = Counter()
     titles: Counter = Counter()
     by_hour: Counter = Counter()
+    walls: Counter = Counter()
     host_signs: dict[str, Counter] = {}
     digests: Counter = Counter()
     scanned = 0
@@ -149,7 +194,11 @@ def scan(directory: Path, head_bytes: int = HEAD_BYTES) -> dict:
         text = raw.decode("utf-8", "replace")
         head = text.lower()          # признаки ищем регистронезависимо…
 
+        wall = login_wall(head)
+        walls[wall] += 1
         hit = {label for needle, label in SIGNS if needle in head}
+        if wall.startswith("отказ"):
+            hit.add("отказ: сначала вход/регистрация")
         for label in hit or {"без явного признака"}:
             signs[label] += 1
             host_signs.setdefault(host, Counter())[label] += 1
@@ -191,6 +240,8 @@ def scan(directory: Path, head_bytes: int = HEAD_BYTES) -> dict:
         "unique_hosts": len(hosts),
         "unique_bodies": len(digests),
         "hosts": hosts.most_common(30),
+        "all_hosts": dict(hosts),          # для сверки со списками .success
+        "login_wall": walls.most_common(),
         "host_repeat": dict(repeat),
         "tlds": tlds.most_common(20),
         "exts": exts.most_common(10),

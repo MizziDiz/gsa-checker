@@ -1827,6 +1827,7 @@ def _scan_report_text(st: dict) -> str:
             add(f"  {cnt:{width}d}  {name}")
 
     block("Причины (файл может попасть в несколько категорий):", st["signs"])
+    block("Вход/регистрация — насколько это реальная преграда:", st["login_wall"])
     block("Домены с повторами:", sorted(st["host_repeat"].items()))
     block("Топ-30 доменов по числу дампов:", st["hosts"])
     block("Зоны (TLD):", st["tlds"])
@@ -1918,6 +1919,7 @@ def cmd_gsa_log(cfg: dict, args) -> None:
             print(f"   {title}: " + ", ".join(f"{k} ×{v}" for k, v in pairs[:limit]))
 
     top("причины", st["signs"], 8)
+    top("вход", st["login_wall"], 4)
     top("движки", st["engines"], 6)
     top("капчи", st["captchas"], 5)
     top("зоны", st["tlds"], 8)

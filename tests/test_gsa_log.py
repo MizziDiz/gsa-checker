@@ -38,7 +38,7 @@ def test_summarises_whole_folder(tmp_path, monkeypatch, capsys):
     assert "файлов: 4" in out
     assert "доменов: 3" in out
     assert "WordPress ×2" in out
-    assert "требуется вход" in out
+    assert "вход:" in out
     assert "ru ×2" in out                       # зоны/языки
 
 
