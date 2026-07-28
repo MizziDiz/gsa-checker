@@ -315,8 +315,12 @@ document.querySelectorAll(".panel.collapsible .panel-head").forEach(h=>{
 
 /* ---- hero + KPI ---- */
 const T = D.totals;
-let mode = store.get("kpimode","new");        // режим KPI: 'old' | 'new'
+const MLBL = {old:"Старый", new:"Новый", gsa:"KPI GSA"};   // подписи кнопок режимов
+const MODES = Object.keys(D.modes);
+let mode = store.get("kpimode", MODES.includes("gsa")?"gsa":MODES[0]);
+if(!D.modes[mode]) mode = MODES[0];
 const M = ()=>D.modes[mode];
+$("#kpimodeSeg").innerHTML = MODES.map(k=>`<button data-m="${k}">${MLBL[k]||k}</button>`).join("");
 
 function renderKPI(){
   const m=M(), pct=m.target?Math.round(m.added/m.target*100):0;
@@ -358,7 +362,7 @@ let filt=store.get("gfilt","all");
 let sel=new Set(store.get("gsel",[]));
 const expanded=new Set();   // раскрытые группы (страны-члены)
 const cols={geo:1,total:2,delta:3};
-const TGT = r => mode==="old" ? r[4] : r[5];   // флаг «цель» для текущего режима
+const TGT = r => !!(r[4]||{})[mode];   // флаг «цель» для текущего режима
 function renderGeo(){
   let rows=D.geo.slice();
   if(filt==="tgt") rows=rows.filter(TGT);
@@ -458,9 +462,9 @@ def render_html(cfg, totals, reports, member_added=None, kpi_modes=None):
     week_date = latest["date"] if latest else "—"
     servers = generic_servers(latest["servers"]) if latest else "—"
 
-    # два режима KPI (старый/новый); без файла режимов — оба = текущий конфиг
+    # режимы KPI (произвольное число: old/new/gsa…); без файла — один режим из конфига
     fallback = cfg.get("kpi_targets", [])
-    modes_cfg = kpi_modes or {"old": fallback, "new": fallback}
+    modes_cfg = kpi_modes or {"new": fallback}
 
     def mode_data(kt_list):
         kpi = compute_kpi(kt_list, added_by_file)
@@ -473,9 +477,8 @@ def render_html(cfg, totals, reports, member_added=None, kpi_modes=None):
             "total": sum(1 for r in kpi if r["target"] > 0),
             "targeted": len(files), "files": files,
         }
-    m_old = mode_data(modes_cfg.get("old", fallback))
-    m_new = mode_data(modes_cfg.get("new", fallback))
-    old_files, new_files = set(m_old["files"]), set(m_new["files"])
+    modes = {k: mode_data(v) for k, v in modes_cfg.items()}
+    files_by_mode = {k: set(m["files"]) for k, m in modes.items()}
 
     geo = []
     members_map = {}      # имя группы -> [[flag,name,total,delta],…] для раскрытия (новый режим)
@@ -496,15 +499,16 @@ def render_html(cfg, totals, reports, member_added=None, kpi_modes=None):
                 mem.append(["🌐", "прочие (gTLD/vanity)", res, int(member_added.get(fname, 0))])
             mem.sort(key=lambda x: -x[2])
             members_map[name] = mem
-            geo.append([flag, name, g_total, g_added, fname in old_files, fname in new_files])
+            geo.append([flag, name, g_total, g_added,
+                        {k: (fname in fs) for k, fs in files_by_mode.items()}])
         else:
             geo.append([flag, name, totals.get(fname, 0), added_by_file.get(fname, 0),
-                        fname in old_files, fname in new_files])
+                        {k: (fname in fs) for k, fs in files_by_mode.items()}])
 
     gen = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M %Z")
     data = {
         "geo": geo, "members": members_map, "week": week_date, "gen": gen,
-        "modes": {"old": m_old, "new": m_new},
+        "modes": modes,
         "totals": {"base": total, "added": added_week},
     }
     data_json = json.dumps(data, ensure_ascii=False)
@@ -527,7 +531,7 @@ def render_html(cfg, totals, reports, member_added=None, kpi_modes=None):
     <p class="sub">Данные за неделю: {esc(week_date)} · источников: {esc(n_src)}</p>
     <div class="servers"><span><span class="dot">●</span> {esc(servers)}</span>
       <span>Всего в базе: <b class="num">{total:,}</b></span></div>
-    <div class="seg kpimode" id="kpimodeSeg"><button data-m="old">Старый KPI</button><button data-m="new">Новый KPI</button></div>
+    <div class="seg kpimode" id="kpimodeSeg"></div>
   </header>
 
   <section class="hero" id="hero"></section>
