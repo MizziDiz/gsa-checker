@@ -106,3 +106,16 @@ def test_mail_signs_and_catchall_domain(tmp_path):
     assert "plain.io" not in dict(st["mail_hosts"])      # просто поле email — не сигнал
     assert st["mail_domain_hits"] == 1
     assert dict(st["mail_domain_hosts"]) == {"blog.com": 1}
+
+
+def test_unexpanded_spin_macro_in_address_is_flagged(tmp_path):
+    """Если GSA подставил макрос как есть — адрес в дампе содержит '%'."""
+    (tmp_path / "ok.ru_AA11.html").write_text(
+        "<html>bob.smith123@graniteloom.com registered</html>")
+    (tmp_path / "bad.ru_BB22.html").write_text(
+        "<html>%spinfile-names.dat%@graniteloom.com invalid email</html>")
+
+    st = debugscan.scan(tmp_path, mail_domain="graniteloom.com")
+
+    assert st["mail_addr_unique"] == 2
+    assert dict(st["mail_macro_unexpanded"]) == {"%spinfile-names.dat%@graniteloom.com": 1}

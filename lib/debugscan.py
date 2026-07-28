@@ -201,6 +201,8 @@ def scan(directory: Path, head_bytes: int = HEAD_BYTES,
     mail_hosts: Counter = Counter()
     domain_hits = 0
     domain_hosts: Counter = Counter()
+    mail_addrs: Counter = Counter()
+    macro_raw: Counter = Counter()
     host_signs: dict[str, Counter] = {}
     digests: Counter = Counter()
     scanned = 0
@@ -259,6 +261,12 @@ def scan(directory: Path, head_bytes: int = HEAD_BYTES,
         if mail_domain and mail_domain in head:
             domain_hits += 1
             domain_hosts[host] += 1
+            # какие адреса реально дошли до страницы: если тут виден кусок
+            # спин-макроса (%spinfile…), значит GSA подставил его как есть
+            for addr in re.findall(r"[a-z0-9._%+-]{1,64}@" + re.escape(mail_domain), head):
+                mail_addrs[addr] += 1
+                if "%" in addr:
+                    macro_raw[addr] += 1
 
         m = _LANG_RE.search(head)
         if m:
@@ -298,6 +306,9 @@ def scan(directory: Path, head_bytes: int = HEAD_BYTES,
         "mail_domain": mail_domain or "",
         "mail_domain_hits": domain_hits,
         "mail_domain_hosts": domain_hosts.most_common(20),
+        "mail_addr_samples": mail_addrs.most_common(25),
+        "mail_addr_unique": len(mail_addrs),
+        "mail_macro_unexpanded": macro_raw.most_common(10),
         "host_repeat": dict(repeat),
         "tlds": tlds.most_common(20),
         "exts": exts.most_common(10),

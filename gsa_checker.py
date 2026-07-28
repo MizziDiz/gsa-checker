@@ -1856,6 +1856,13 @@ def _scan_report_text(st: dict) -> str:
         f"{st['mail_domain_hits']}")
     if st["mail_domain_hosts"]:
         add("  где именно: " + ", ".join(f"{h} ×{n}" for h, n in st["mail_domain_hosts"]))
+    add(f"  уникальных наших адресов в дампах: {st['mail_addr_unique']}")
+    if st["mail_addr_samples"]:
+        add("  примеры адресов: "
+            + ", ".join(f"{a} ×{n}" for a, n in st["mail_addr_samples"][:15]))
+    if st["mail_macro_unexpanded"]:
+        add("  ⚠ НЕРАСКРЫТЫЙ спин-макрос в адресе: "
+            + ", ".join(f"{a} ×{n}" for a, n in st["mail_macro_unexpanded"]))
     if st["mail_hosts"]:
         add("  сайты с почтовыми сообщениями: "
             + ", ".join(f"{h} ×{n}" for h, n in st["mail_hosts"]))
@@ -1952,7 +1959,10 @@ def cmd_gsa_log(cfg: dict, args) -> None:
     top("причины", st["signs"], 8)
     top("вход", st["login_wall"], 4)
     top("почта", st["mail_signs"], 5)
-    print(f"   наш домен {st['mail_domain'] or '(не задан)'} в дампах: {st['mail_domain_hits']}")
+    print(f"   наш домен {st['mail_domain'] or '(не задан)'} в дампах: "
+          f"{st['mail_domain_hits']}, уникальных адресов: {st['mail_addr_unique']}"
+          + (f", НЕРАСКРЫТЫХ макросов: {sum(n for _, n in st['mail_macro_unexpanded'])}"
+             if st["mail_macro_unexpanded"] else ""))
     top("движки", st["engines"], 6)
     top("капчи", st["captchas"], 5)
     top("зоны", st["tlds"], 8)
