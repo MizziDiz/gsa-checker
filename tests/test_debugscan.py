@@ -148,3 +148,20 @@ def test_mail_cases_capture_address_host_and_text(tmp_path):
     assert case["label"] == "адрес отклонён как некорректный"
     assert "please try another" in case["text"]
     assert "<div" not in case["text"]            # теги вычищены
+
+
+def test_js_validator_templates_are_not_mail_errors():
+    """Заготовки валидатора и «login or password» — не отказ по нашему адресу."""
+    assert debugscan.mail_hits(
+        'jquery.validator.messages.email = "invalid email address format.";') == set()
+    assert debugscan.mail_hits("toastr.error('invalid email or password.');") == set()
+    assert debugscan.mail_hits(
+        "the credentials you have supplied are invalid. "
+        "please check your email and password, and try again.") == set()
+    # настоящие сообщения по-прежнему ловятся
+    assert debugscan.mail_hits(
+        "this email address is already registered. perhaps you created an account"
+    ) == {"адрес уже зарегистрирован"}
+    assert debugscan.mail_hits(
+        "to complete your registration, please check your email for account activation"
+    ) == {"ждёт подтверждения по почте"}

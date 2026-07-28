@@ -100,6 +100,39 @@ MAIL_SIGNS: tuple[tuple[str, str], ...] = (
     ("проверьте почту", "ждёт подтверждения по почте"),
 )
 
+# Контекст, в котором почтовая фраза НЕ про наш адрес: заготовка валидатора в JS
+# или сообщение про пару логин+пароль. Проверяется по окрестности фразы.
+MAIL_FALSE_CONTEXT: tuple[str, ...] = (
+    "or password",
+    "and password",
+    "jquery.validator",
+    "validator.messages",
+    "toastr.",
+    "messages.email =",
+    "data-msg",
+    "placeholder=",
+)
+
+
+def mail_hits(head: str) -> set[str]:
+    """Категории почтовых сообщений, встреченные на странице.
+
+    Фраза засчитывается, только если рядом нет признаков JS-заготовки валидации
+    и речь не про пару логин+пароль: иначе «invalid email» из
+    `jquery.validator.messages.email = ...` выглядело бы как отказ сайта.
+    """
+    found: set[str] = set()
+    for needle, label in MAIL_SIGNS:
+        i = head.find(needle)
+        while i >= 0:
+            around = head[max(0, i - 60): i + len(needle) + 60]
+            if not any(bad in around for bad in MAIL_FALSE_CONTEXT):
+                found.add(label)
+                break
+            i = head.find(needle, i + 1)
+    return found
+
+
 # Движок сайта: по характерным маркерам в разметке.
 ENGINES: tuple[tuple[str, str], ...] = (
     ("wp-content", "WordPress"),
@@ -265,7 +298,7 @@ def scan(directory: Path, head_bytes: int = HEAD_BYTES,
             if needle in head:
                 captchas[label] += 1
 
-        mail_hit = {label for needle, label in MAIL_SIGNS if needle in head}
+        mail_hit = mail_hits(head)
         for label in mail_hit:
             mail_signs[label] += 1
         if mail_hit:
