@@ -395,6 +395,26 @@ const CFG = D.cfg || {regions:[], kpi:[], notStated:"Not Stated.txt"};
 const bakedDates = new Set((D.weeks||[]).map(w=>w.date));
 const labelToFile = {}; CFG.regions.forEach(r=>{ labelToFile[r[0]+" "+r[1]] = r[2]; });
 function splitLabel(l){ const i=l.indexOf(" "); return i<0?["",l]:[l.slice(0,i), l.slice(i+1)]; }
+/* режимы KPI для недель без baked-modes (вручную добавленные): считаем из гео */
+const NAME2FILE={}; (CFG.regions||[]).forEach(r=>{ NAME2FILE[r[1]]=r[2]; });
+NAME2FILE["Южная Африка"]=NAME2FILE["Африка"]||"africa.txt";   // старый ярлык в ручных неделях
+const GM = CFG.groupMembers || {};
+function computeModes(w){
+  if(!w || w.modes || !CFG.modesCfg) return;
+  const fd={}; (w.geo||[]).forEach(g=>{ const fn=NAME2FILE[g[1]]; if(fn) fd[fn]=(fd[fn]||0)+(g[3]||0); });
+  const gadd=bks=>bks.reduce((s,b)=>s+(fd[b]||0)+(GM[b]||[]).reduce((ss,m)=>ss+(fd[m]||0),0),0);
+  const modes={}, fbm={};
+  for(const mk in CFG.modesCfg){ const files=new Set();
+    const groups=CFG.modesCfg[mk].map(([label,target,buckets])=>{ buckets.forEach(b=>files.add(b));
+      const sl=splitLabel(label); return [sl[0],sl[1],gadd(buckets),target]; });
+    const gl=groups.filter(g=>g[3]>0);
+    modes[mk]={groups, added:gl.reduce((s,g)=>s+g[2],0), target:gl.reduce((s,g)=>s+g[3],0),
+      closed:gl.filter(g=>g[2]>=g[3]).length, total:gl.length, targeted:files.size, files:[...files]};
+    fbm[mk]=files; }
+  w.modes=modes;
+  w.geo=(w.geo||[]).map(g=>{ const fn=NAME2FILE[g[1]];
+    return [g[0],g[1],g[2],g[3], fn?Object.fromEntries(Object.keys(modes).map(mk=>[mk,fbm[mk].has(fn)])):(g[4]||false)]; });
+}
 function weekLabel(dstr){ try{ const d=new Date(dstr+"T00:00:00"), s=new Date(d-7*864e5);
   const f=x=>String(x.getDate()).padStart(2,"0")+"."+String(x.getMonth()+1).padStart(2,"0");
   return f(s)+"–"+f(d); }catch(e){ return dstr; } }
@@ -558,9 +578,10 @@ function weekFromReport(date, per){
     return [sl[0],sl[1],fact,k[1]]; });
   const base=geo.reduce((s,g)=>s+g[2],0), added=geo.reduce((s,g)=>s+g[3],0);
   const kpi_added=groups.reduce((s,g)=>s+g[2],0), kpi_target=groups.reduce((s,g)=>s+g[3],0);
-  return {date, label:weekLabel(date), servers:"—", manual:true, geo, groups,
+  const w={date, label:weekLabel(date), servers:"—", manual:true, geo, groups,
     totals:{base,added,kpi_added,kpi_target,groups_closed:groups.filter(g=>g[2]>=g[3]).length,
-      groups_total:groups.length, targets:geo.filter(g=>g[4]).length}}; }
+      groups_total:groups.length, targets:geo.filter(g=>g[4]).length}};
+  computeModes(w); return w; }
 async function saveManual(){ const manual=weeks.filter(w=>!bakedDates.has(w.date));
   try{ await fetch("/api/weeks",{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify(manual)}); }catch(e){} }
 
@@ -590,7 +611,7 @@ buildSelector(); renderAll();
   if(isMaster && $("#ctlLink")) $("#ctlLink").hidden=false;
   let manual=[]; try{ const r=await fetch("/api/weeks"); if(r.ok) manual=await r.json(); }catch(e){}
   if(Array.isArray(manual) && manual.length){ const byDate={};
-    manual.forEach(w=>{ if(!bakedDates.has(w.date)) byDate[w.date]=w; });
+    manual.forEach(w=>{ if(!bakedDates.has(w.date)){ computeModes(w); byDate[w.date]=w; } });
     (D.weeks||[]).forEach(w=>byDate[w.date]=w); weeks=Object.values(byDate); }
   resortWeeks();
 })();
@@ -793,7 +814,12 @@ def render_html(cfg, totals, reports, kpi_modes=None, member_added=None):
         flag, name = split_label(label)
         regions_cfg.append([flag, name, fname, fname in kpi_files])
     cfg_js = {"regions": regions_cfg, "notStated": B.NOT_STATED_FILE,
-              "kpi": [[kt["label"], kt["target"], kt["buckets"]] for kt in kpi_targets]}
+              "kpi": [[kt["label"], kt["target"], kt["buckets"]] for kt in kpi_targets],
+              # определения режимов + карта стран-членов — чтобы клиент считал режимы
+              # для вручную добавленных недель (у них нет baked-modes)
+              "modesCfg": {k: [[kt["label"], kt["target"], kt["buckets"]] for kt in v]
+                           for k, v in modes_cfg.items()},
+              "groupMembers": {g: sorted(ms) for g, ms in B.GROUP_MEMBERS.items()}}
 
     gen = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M %Z")
     cur = len(weeks) - 1
