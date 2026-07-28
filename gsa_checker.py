@@ -1859,6 +1859,13 @@ def _scan_report_text(st: dict) -> str:
     add("  из них с НАШИМ адресом на той же странице (т.е. реакция именно на него): "
         + (", ".join(f"{k} ×{v}" for k, v in st["mail_signs_with_addr"]) or "нет"))
     add(f"  уникальных наших адресов в дампах: {st['mail_addr_unique']}")
+    if st["mail_cases"]:
+        add("")
+        add("Конкретные случаи (наш адрес + сообщение сайта):")
+        for c in st["mail_cases"]:
+            add(f"  [{c['label']}] {c['host']}  ({c['file']})")
+            add(f"     адрес: {', '.join(c['addrs']) or '—'}")
+            add(f"     текст: {c['text'][:300]}")
     if st["mail_addr_samples"]:
         add("  примеры адресов: "
             + ", ".join(f"{a} ×{n}" for a, n in st["mail_addr_samples"][:15]))

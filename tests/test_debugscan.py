@@ -132,3 +132,19 @@ def test_mail_sign_counted_as_ours_only_with_our_address(tmp_path):
 
     assert dict(st["mail_signs"])["адрес отклонён как некорректный"] == 2
     assert dict(st["mail_signs_with_addr"])["адрес отклонён как некорректный"] == 1
+
+
+def test_mail_cases_capture_address_host_and_text(tmp_path):
+    """По каждому реальному случаю видно адрес, сайт и фразу сайта."""
+    (tmp_path / "forum.ru_AA11.html").write_text(
+        "<html><div class='err'>invalid email: bob.smith@graniteloom.com "
+        "please try another</div></html>")
+
+    st = debugscan.scan(tmp_path, mail_domain="graniteloom.com")
+
+    case = st["mail_cases"][0]
+    assert case["host"] == "forum.ru"
+    assert case["addrs"] == ["bob.smith@graniteloom.com"]
+    assert case["label"] == "адрес отклонён как некорректный"
+    assert "please try another" in case["text"]
+    assert "<div" not in case["text"]            # теги вычищены

@@ -137,6 +137,7 @@ CAPTCHAS: tuple[tuple[str, str], ...] = (
     ("kcaptcha", "KCaptcha"),
 )
 
+_TAGS_RE = re.compile(r"<[^>]+>")
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.S)
 _LANG_RE = re.compile(r"<html[^>]*\blang=[\"']?([a-zA-Z-]{2,8})")
 
@@ -154,6 +155,15 @@ def split_name(name: str) -> str:
 def tld_of(host: str) -> str:
     parts = host.rsplit(".", 1)
     return parts[1].lower() if len(parts) == 2 else "(нет)"
+
+
+def snippet(head: str, needle: str, width: int = 90) -> str:
+    """Кусок текста вокруг найденной фразы — без тегов, в одну строку."""
+    i = head.find(needle)
+    if i < 0:
+        return ""
+    chunk = head[max(0, i - width): i + len(needle) + width]
+    return " ".join(_TAGS_RE.sub(" ", chunk).split())
 
 
 def login_wall(head: str) -> str:
@@ -203,6 +213,7 @@ def scan(directory: Path, head_bytes: int = HEAD_BYTES,
     domain_hosts: Counter = Counter()
     mail_addrs: Counter = Counter()
     mail_signs_with_addr: Counter = Counter()
+    mail_cases: list[dict] = []
     macro_raw: Counter = Counter()
     host_signs: dict[str, Counter] = {}
     digests: Counter = Counter()
@@ -262,8 +273,17 @@ def scan(directory: Path, head_bytes: int = HEAD_BYTES,
         # сообщение про почту + НАШ адрес на той же странице = реакция именно на наш
         # адрес; без адреса это, скорее всего, шаблон JS-валидации пустой формы
         if mail_hit and mail_domain and mail_domain in head:
+            addrs = sorted(set(re.findall(
+                r"[a-z0-9._%+-]{1,64}@" + re.escape(mail_domain), head)))
             for label in mail_hit:
                 mail_signs_with_addr[label] += 1
+                if len(mail_cases) < 60:
+                    phrase = next((n for n, lab in MAIL_SIGNS
+                                   if lab == label and n in head), "")
+                    mail_cases.append({
+                        "host": host, "file": p.name, "label": label,
+                        "addrs": addrs[:5], "text": snippet(head, phrase),
+                    })
         if mail_domain and mail_domain in head:
             domain_hits += 1
             domain_hosts[host] += 1
@@ -313,6 +333,7 @@ def scan(directory: Path, head_bytes: int = HEAD_BYTES,
         "mail_domain_hits": domain_hits,
         "mail_domain_hosts": domain_hosts.most_common(20),
         "mail_signs_with_addr": mail_signs_with_addr.most_common(),
+        "mail_cases": mail_cases,
         "mail_addr_samples": mail_addrs.most_common(25),
         "mail_addr_unique": len(mail_addrs),
         "mail_macro_unexpanded": macro_raw.most_common(10),
