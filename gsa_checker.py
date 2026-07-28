@@ -1776,12 +1776,77 @@ def _tail_text(path: Path, max_bytes: int = 2 * 1024 * 1024) -> list[str]:
     return lines
 
 
+# Признаки причины неудачи в HTML-дампе GSA: подстрока в теле → человеческая метка.
+DUMP_SIGNS: tuple[tuple[str, str], ...] = (
+    ("captcha", "капча"),
+    ("recaptcha", "капча"),
+    ("cloudflare", "Cloudflare/WAF"),
+    ("access denied", "доступ запрещён"),
+    ("forbidden", "доступ запрещён"),
+    ("403 ", "доступ запрещён"),
+    ("404 ", "страница не найдена"),
+    ("not found", "страница не найдена"),
+    ("blocked", "блокировка"),
+    ("banned", "блокировка"),
+    ("spam", "антиспам"),
+    ("moderat", "премодерация"),
+    ("login", "требуется вход"),
+    ("register", "требуется регистрация"),
+    ("<error>", "ошибка приложения"),
+    ("database error", "ошибка БД сайта"),
+)
+
+
+def _dump_summary(d: Path, files: list[Path], sample: int = 300) -> None:
+    """Сводка по debug-папке GSA: это не текстовый лог, а HTML-дампы страниц —
+    по файлу на проблемную цель. Печатает окно времени, топ-домены, долю пустых
+    (сайт не отдал контент) и распознанные причины по выборке новейших файлов."""
+    stats = sorted(((p, p.stat()) for p in files), key=lambda t: t[1].st_mtime, reverse=True)
+    total_mb = sum(st.st_size for _, st in stats) / 1024 / 1024
+    fmt = "%Y-%m-%d %H:%M"
+    print(f"── debug-папка {d} ──")
+    print(f"   файлов: {len(stats)}, объём: {total_mb:.1f} МБ, "
+          f"свежий: {time.strftime(fmt, time.localtime(stats[0][1].st_mtime))}, "
+          f"старый: {time.strftime(fmt, time.localtime(stats[-1][1].st_mtime))}")
+    empty = sum(1 for _, st in stats if st.st_size == 0)
+    print(f"   пустых (0 байт — сайт не отдал страницу): {empty} "
+          f"({empty * 100 // max(len(stats), 1)}%)")
+
+    exts = Counter(p.suffix.lower() or "(без расширения)" for p, _ in stats)
+    print("   расширения: " + ", ".join(f"{e} ×{n}" for e, n in exts.most_common(6)))
+
+    # имя дампа = <домен>_<hex>.html; один домен многими файлами = упорно не берётся
+    hosts = Counter(p.name.rsplit("_", 1)[0] for p, _ in stats)
+    print(f"   уникальных доменов: {len(hosts)}; топ-10 по числу дампов:")
+    for host, n in hosts.most_common(10):
+        print(f"      {n:5d}  {host}")
+
+    reasons: Counter = Counter()
+    for p, st in stats[:sample]:
+        if st.st_size == 0:
+            reasons["пусто (нет ответа)"] += 1
+            continue
+        try:
+            head = p.open("rb").read(8000).decode("utf-8", "replace").lower()
+        except OSError:
+            continue
+        hit = {label for needle, label in DUMP_SIGNS if needle in head}
+        for label in hit or {"без явного признака"}:
+            reasons[label] += 1
+    print(f"   признаки по выборке из {min(sample, len(stats))} новейших "
+          f"(файл может попасть в несколько категорий):")
+    for label, n in reasons.most_common(12):
+        print(f"      {n:5d}  {label}")
+    print("   ⚠ папку GSA не чистит сама — растёт бесконечно, чистить вручную.")
+
+
 def cmd_gsa_log(cfg: dict, args) -> None:
     """Читает файловый лог GSA SER (read-only). Ищет логи в gsa_log_dir (конфиг),
     %APPDATA%/GSA Search Engine Ranker/debug (туда пишет debug-режим GSA — берём
     ЛЮБЫЕ файлы, не только *.log), а также <projects>/../{debug,log}, <projects>/..,
-    <gsa_exe>/{debug,log}, <gsa_exe>/.. (*.log). Печатает последние N строк новейшего;
-    с --mail — только строки про почту/верификацию."""
+    <gsa_exe>/{debug,log}, <gsa_exe>/.. (*.log). По debug-папке печатает СВОДКУ
+    (там HTML-дампы страниц, а не строки лога); по текстовому логу — последние N
+    строк новейшего, с --mail только строки про почту/верификацию."""
     cand: list[Path] = []
     if cfg.get("gsa_log_dir"):
         cand.append(Path(cfg["gsa_log_dir"]))
@@ -1799,30 +1864,24 @@ def cmd_gsa_log(cfg: dict, args) -> None:
         if d.is_dir() and str(d) not in seen:
             seen.add(str(d))
             dirs.append(d)
-    # в debug-папках GSA имена/расширения свои (per-thread дампы) — берём все файлы
-    found: list[Path] = []
+    # debug-папка — это дампы страниц (по файлу на проблемную цель), не строки лога:
+    # по ней даём сводку. Тейлить построчно имеет смысл только текстовые логи.
+    texts: list[Path] = []
     for d in dirs:
         if d.name.lower() == "debug":
             files = [p for p in d.iterdir() if p.is_file()]
-            found += files
-            listing = sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)[:15]
-            print(f"── debug-папка {d}: {len(files)} файлов ──")
-            for p in listing:
-                st = p.stat()
-                print(f"   {p.name}  {st.st_size/1024:.0f} КБ  "
-                      f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime))}")
+            here_texts = [p for p in files if p.suffix.lower() in (".log", ".txt")]
+            dumps = [p for p in files if p not in here_texts]
+            if dumps:
+                _dump_summary(d, dumps)
+            texts += here_texts
         else:
-            found += list(d.glob("*.log"))
-    if not found:
-        # лог не в стандартном месте (debug-режим мог класть иначе) — покажем, что есть
-        print("GSA *.log не найден. Содержимое кандидат-папок (.log/.txt):")
-        for d in dirs:
-            names = sorted(p.name for p in d.iterdir()
-                           if p.is_file() and p.suffix.lower() in (".log", ".txt"))[:20]
-            print(f"  {d}\n     {names or '— нет .log/.txt'}")
-        print("Найдёшь debug-лог — задай его папку через gsa_log_dir в data-конфиге.")
+            texts += list(d.glob("*.log"))
+    if not texts:
+        print("\nТекстового лога GSA нет — SER пишет строки только в окно сообщений "
+              "(правый клик по нему → «Log to file», чтобы включить файловый лог).")
         return
-    newest = max(found, key=lambda p: p.stat().st_mtime)
+    newest = max(texts, key=lambda p: p.stat().st_mtime)
     lines = _tail_text(newest)
     n = int(getattr(args, "lines", None) or 300)
     if getattr(args, "mail", False):
