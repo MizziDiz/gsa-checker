@@ -86,3 +86,23 @@ def test_signs_no_longer_flag_bare_login_word(tmp_path):
 
     assert dict(st["signs"]).get("отказ: сначала вход/регистрация") is None
     assert dict(st["signs"])["без явного признака"] == 1
+
+
+def test_mail_signs_and_catchall_domain(tmp_path):
+    """Реакция сайта на адрес считается отдельно от нашего домена в дампе."""
+    (tmp_path / "forum.ru_AB12.html").write_text(
+        "<html>Please enter a valid email address</html>")
+    (tmp_path / "blog.com_CD34.html").write_text(
+        "<html>A confirmation email has been sent to bob@graniteloom.com</html>")
+    (tmp_path / "shop.de_EF56.html").write_text("<html>disposable email not allowed</html>")
+    (tmp_path / "plain.io_0011.html").write_text("<html>your email: <input name=email></html>")
+
+    st = debugscan.scan(tmp_path, mail_domain="graniteloom.com")
+
+    signs = dict(st["mail_signs"])
+    assert signs["адрес отклонён как некорректный"] == 1
+    assert signs["ждёт подтверждения по почте"] == 1
+    assert signs["домен в чёрном списке (одноразовый)"] == 1
+    assert "plain.io" not in dict(st["mail_hosts"])      # просто поле email — не сигнал
+    assert st["mail_domain_hits"] == 1
+    assert dict(st["mail_domain_hosts"]) == {"blog.com": 1}

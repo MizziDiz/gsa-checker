@@ -1803,6 +1803,25 @@ def gsa_debug_dir(cfg: dict) -> Path | None:
     return None
 
 
+def catchall_domain(cfg: dict) -> str | None:
+    """Домен catch-all почты из конфига — чтобы найти в дампах НАШ адрес.
+
+    В `email_catchall_hex` лежит строка аккаунта GSA целиком (спин-макрос адреса,
+    сервер, пароль в обфускации); нам нужен только домен после '@'.
+    """
+    hexed = str(cfg.get("email_catchall_hex", "") or "")
+    if hexed:
+        try:
+            raw = bytes.fromhex(hexed).decode("utf-8", "replace")
+        except ValueError:
+            raw = ""
+        m = re.search(r"@([a-z0-9.-]+\.[a-z]{2,})", raw, re.I)
+        if m:
+            return m.group(1).lower()
+    dom = str(cfg.get("email_domain", "") or "").strip().lower()
+    return dom or None
+
+
 def _scan_report_text(st: dict) -> str:
     """Полный человекочитаемый отчёт по скану (идёт в файл, не в stdout)."""
     fmt = "%Y-%m-%d %H:%M"
@@ -1828,6 +1847,18 @@ def _scan_report_text(st: dict) -> str:
 
     block("Причины (файл может попасть в несколько категорий):", st["signs"])
     block("Вход/регистрация — насколько это реальная преграда:", st["login_wall"])
+    add("")
+    add("Почта — что сайты ответили про адрес "
+        f"(ошибки самого GSA/POP3 сюда не попадают): всего {sum(n for _, n in st['mail_signs'])}")
+    for name, cnt in st["mail_signs"]:
+        add(f"  {cnt:6d}  {name}")
+    add(f"Наш домен {st['mail_domain'] or '(не задан)'} встретился в дампах: "
+        f"{st['mail_domain_hits']}")
+    if st["mail_domain_hosts"]:
+        add("  где именно: " + ", ".join(f"{h} ×{n}" for h, n in st["mail_domain_hosts"]))
+    if st["mail_hosts"]:
+        add("  сайты с почтовыми сообщениями: "
+            + ", ".join(f"{h} ×{n}" for h, n in st["mail_hosts"]))
     block("Домены с повторами:", sorted(st["host_repeat"].items()))
     block("Топ-30 доменов по числу дампов:", st["hosts"])
     block("Зоны (TLD):", st["tlds"])
@@ -1885,7 +1916,7 @@ def cmd_gsa_log(cfg: dict, args) -> None:
         print(f"debug-папка {d} пуста (debug-режим GSA выключен или её почистили).")
         return
 
-    st = debugscan.scan(d)
+    st = debugscan.scan(d, mail_domain=catchall_domain(cfg))
     fmt = "%Y-%m-%d %H:%M"
     written = _write_scan_report(cfg, st)
 
@@ -1920,6 +1951,8 @@ def cmd_gsa_log(cfg: dict, args) -> None:
 
     top("причины", st["signs"], 8)
     top("вход", st["login_wall"], 4)
+    top("почта", st["mail_signs"], 5)
+    print(f"   наш домен {st['mail_domain'] or '(не задан)'} в дампах: {st['mail_domain_hits']}")
     top("движки", st["engines"], 6)
     top("капчи", st["captchas"], 5)
     top("зоны", st["tlds"], 8)

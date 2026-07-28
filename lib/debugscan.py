@@ -67,6 +67,39 @@ PASSWORD_FIELDS: tuple[str, ...] = (
 # Слово в разметке (шапка/меню) — сам по себе НЕ признак отказа.
 LOGIN_WORDS: tuple[str, ...] = ("login", "log in", "sign in", "register")
 
+# Что сайт сказал про НАШ адрес почты. Здесь только фразы-реакции: просто слово
+# «email» есть в любой форме и ничего не значит.
+# ВНИМАНИЕ: ошибки самого GSA (POP3 не отвечает, письмо не пришло) сюда попасть
+# НЕ МОГУТ — в debug лежат только HTTP-ответы сайтов.
+MAIL_SIGNS: tuple[tuple[str, str], ...] = (
+    ("invalid email", "адрес отклонён как некорректный"),
+    ("not a valid email", "адрес отклонён как некорректный"),
+    ("enter a valid email", "адрес отклонён как некорректный"),
+    ("valid e-mail address", "адрес отклонён как некорректный"),
+    ("email is not valid", "адрес отклонён как некорректный"),
+    ("некорректный e-mail", "адрес отклонён как некорректный"),
+    ("email already", "адрес уже зарегистрирован"),
+    ("already registered", "адрес уже зарегистрирован"),
+    ("already in use", "адрес уже зарегистрирован"),
+    ("already taken", "адрес уже зарегистрирован"),
+    ("уже зарегистрирован", "адрес уже зарегистрирован"),
+    ("disposable", "домен в чёрном списке (одноразовый)"),
+    ("temporary email", "домен в чёрном списке (одноразовый)"),
+    ("throwaway", "домен в чёрном списке (одноразовый)"),
+    ("email domain", "домен в чёрном списке (одноразовый)"),
+    ("domain is not allowed", "домен в чёрном списке (одноразовый)"),
+    ("not allowed to register", "домен в чёрном списке (одноразовый)"),
+    ("mx record", "домен в чёрном списке (одноразовый)"),
+    ("confirmation email", "ждёт подтверждения по почте"),
+    ("verification email", "ждёт подтверждения по почте"),
+    ("check your email", "ждёт подтверждения по почте"),
+    ("activation link", "ждёт подтверждения по почте"),
+    ("activation email", "ждёт подтверждения по почте"),
+    ("has been sent to your email", "ждёт подтверждения по почте"),
+    ("письмо с подтверждением", "ждёт подтверждения по почте"),
+    ("проверьте почту", "ждёт подтверждения по почте"),
+)
+
 # Движок сайта: по характерным маркерам в разметке.
 ENGINES: tuple[tuple[str, str], ...] = (
     ("wp-content", "WordPress"),
@@ -139,8 +172,13 @@ def login_wall(head: str) -> str:
     return "без упоминания входа"
 
 
-def scan(directory: Path, head_bytes: int = HEAD_BYTES) -> dict:
-    """Полный проход по всем файлам папки. Возвращает словарь статистики."""
+def scan(directory: Path, head_bytes: int = HEAD_BYTES,
+         mail_domain: str | None = None) -> dict:
+    """Полный проход по всем файлам папки. Возвращает словарь статистики.
+
+    mail_domain — домен catch-all (напр. graniteloom.com): если он встретился в
+    дампе, значит наш адрес реально дошёл до страницы (форма приняла/отвергла его).
+    """
     started = time.time()
     files = [p for p in directory.iterdir() if p.is_file()]
 
@@ -159,6 +197,10 @@ def scan(directory: Path, head_bytes: int = HEAD_BYTES) -> dict:
     titles: Counter = Counter()
     by_hour: Counter = Counter()
     walls: Counter = Counter()
+    mail_signs: Counter = Counter()
+    mail_hosts: Counter = Counter()
+    domain_hits = 0
+    domain_hosts: Counter = Counter()
     host_signs: dict[str, Counter] = {}
     digests: Counter = Counter()
     scanned = 0
@@ -209,6 +251,15 @@ def scan(directory: Path, head_bytes: int = HEAD_BYTES) -> dict:
             if needle in head:
                 captchas[label] += 1
 
+        mail_hit = {label for needle, label in MAIL_SIGNS if needle in head}
+        for label in mail_hit:
+            mail_signs[label] += 1
+        if mail_hit:
+            mail_hosts[host] += 1
+        if mail_domain and mail_domain in head:
+            domain_hits += 1
+            domain_hosts[host] += 1
+
         m = _LANG_RE.search(head)
         if m:
             langs[m.group(1).lower()] += 1
@@ -242,6 +293,11 @@ def scan(directory: Path, head_bytes: int = HEAD_BYTES) -> dict:
         "hosts": hosts.most_common(30),
         "all_hosts": dict(hosts),          # для сверки со списками .success
         "login_wall": walls.most_common(),
+        "mail_signs": mail_signs.most_common(),
+        "mail_hosts": mail_hosts.most_common(20),
+        "mail_domain": mail_domain or "",
+        "mail_domain_hits": domain_hits,
+        "mail_domain_hosts": domain_hosts.most_common(20),
         "host_repeat": dict(repeat),
         "tlds": tlds.most_common(20),
         "exts": exts.most_common(10),
