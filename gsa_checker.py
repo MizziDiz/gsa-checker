@@ -26,6 +26,7 @@ import argparse
 import fnmatch
 import json
 import logging
+import os
 import re
 import sys
 import time
@@ -1760,26 +1761,58 @@ def cmd_check(cfg: dict) -> None:
             print(f"  {ext or '(без расширения)':<14} {n}")
 
 
+def _tail_text(path: Path, max_bytes: int = 2 * 1024 * 1024) -> list[str]:
+    """Последние max_bytes файла строками. Debug-логи GSA растут до сотен МБ —
+    целиком в память не читаем. UTF-16 (NUL в начале) декодируем как UTF-16."""
+    size = path.stat().st_size
+    with path.open("rb") as f:
+        if size > max_bytes:
+            f.seek(size - max_bytes)
+        data = f.read()
+    enc = "utf-16" if b"\x00" in data[:200] else "utf-8"
+    lines = data.decode(enc, "replace").splitlines()
+    if size > max_bytes and lines:
+        lines = lines[1:]                      # первая строка среза могла быть разрезана
+    return lines
+
+
 def cmd_gsa_log(cfg: dict, args) -> None:
-    """Читает файловый лог GSA SER (read-only). Ищет *.log в gsa_log_dir (конфиг),
-    <projects>/../log, <projects>/.., <gsa_exe>/log, <gsa_exe>/... Печатает последние N строк
-    новейшего; с --mail — только строки про почту/верификацию. Если *.log нет — показывает
-    .log/.txt в этих папках (найти debug-лог, который GSA мог положить нестандартно)."""
+    """Читает файловый лог GSA SER (read-only). Ищет логи в gsa_log_dir (конфиг),
+    %APPDATA%/GSA Search Engine Ranker/debug (туда пишет debug-режим GSA — берём
+    ЛЮБЫЕ файлы, не только *.log), а также <projects>/../{debug,log}, <projects>/..,
+    <gsa_exe>/{debug,log}, <gsa_exe>/.. (*.log). Печатает последние N строк новейшего;
+    с --mail — только строки про почту/верификацию."""
     cand: list[Path] = []
     if cfg.get("gsa_log_dir"):
         cand.append(Path(cfg["gsa_log_dir"]))
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        cand.append(Path(appdata) / "GSA Search Engine Ranker" / "debug")
     if cfg.get("gsa_projects_dir"):
         base = Path(cfg["gsa_projects_dir"]).parent
-        cand += [base / "log", base]
+        cand += [base / "debug", base / "log", base]
     if cfg.get("gsa_exe_path"):
         base = Path(cfg["gsa_exe_path"]).parent
-        cand += [base / "log", base]
+        cand += [base / "debug", base / "log", base]
     dirs, seen = [], set()
     for d in cand:
         if d.is_dir() and str(d) not in seen:
             seen.add(str(d))
             dirs.append(d)
-    found = [p for d in dirs for p in d.glob("*.log")]
+    # в debug-папках GSA имена/расширения свои (per-thread дампы) — берём все файлы
+    found: list[Path] = []
+    for d in dirs:
+        if d.name.lower() == "debug":
+            files = [p for p in d.iterdir() if p.is_file()]
+            found += files
+            listing = sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)[:15]
+            print(f"── debug-папка {d}: {len(files)} файлов ──")
+            for p in listing:
+                st = p.stat()
+                print(f"   {p.name}  {st.st_size/1024:.0f} КБ  "
+                      f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime))}")
+        else:
+            found += list(d.glob("*.log"))
     if not found:
         # лог не в стандартном месте (debug-режим мог класть иначе) — покажем, что есть
         print("GSA *.log не найден. Содержимое кандидат-папок (.log/.txt):")
@@ -1790,7 +1823,7 @@ def cmd_gsa_log(cfg: dict, args) -> None:
         print("Найдёшь debug-лог — задай его папку через gsa_log_dir в data-конфиге.")
         return
     newest = max(found, key=lambda p: p.stat().st_mtime)
-    lines = newest.read_text(encoding="utf-8", errors="replace").splitlines()
+    lines = _tail_text(newest)
     n = int(getattr(args, "lines", None) or 300)
     if getattr(args, "mail", False):
         kw = ("e-mail", "email", "pop3", "verif", "activat", "confirm", "почт")
