@@ -61,3 +61,29 @@ def test_no_logs_at_all_explains_where_to_enable(tmp_path, monkeypatch, capsys):
     out = _run(monkeypatch, capsys, tmp_path)
 
     assert "Log to file" in out
+
+
+def test_dump_summary_printed_after_log_tail(tmp_path, monkeypatch, capsys):
+    """Панель показывает только хвост вывода задания — сводка должна быть в конце."""
+    d = _debug_dir(tmp_path)
+    (d / "site-a.ru_AB12.html").write_text("<html>captcha</html>")
+    (d / "ser.log").write_text("line one\nline two\n")
+
+    out = _run(monkeypatch, capsys, tmp_path)
+
+    assert out.index("GSA-лог ser.log") < out.index("debug-папка")
+
+
+def test_changes_log_is_not_treated_as_a_log(tmp_path, monkeypatch, capsys):
+    """changes.log — релиз-ноутс GSA, не лог работы."""
+    exe_dir = tmp_path / "app"
+    exe_dir.mkdir()
+    (exe_dir / "changes.log").write_text("1.20 - new: first public release\n")
+    monkeypatch.setenv("APPDATA", str(tmp_path / "nope"))
+    import types as _t
+    gsa_checker.cmd_gsa_log({"gsa_exe_path": str(exe_dir / "ser.exe")},
+                            _t.SimpleNamespace(lines=None, mail=False))
+    out = capsys.readouterr().out
+
+    assert "first public release" not in out
+    assert "Log to file" in out

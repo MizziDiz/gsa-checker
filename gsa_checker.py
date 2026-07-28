@@ -1867,31 +1867,42 @@ def cmd_gsa_log(cfg: dict, args) -> None:
     # debug-папка — это дампы страниц (по файлу на проблемную цель), не строки лога:
     # по ней даём сводку. Тейлить построчно имеет смысл только текстовые логи.
     texts: list[Path] = []
+    dump_dirs: list[tuple[Path, list[Path]]] = []
     for d in dirs:
         if d.name.lower() == "debug":
             files = [p for p in d.iterdir() if p.is_file()]
             here_texts = [p for p in files if p.suffix.lower() in (".log", ".txt")]
             dumps = [p for p in files if p not in here_texts]
             if dumps:
-                _dump_summary(d, dumps)
+                dump_dirs.append((d, dumps))
             texts += here_texts
         else:
-            texts += list(d.glob("*.log"))
-    if not texts:
-        print("\nТекстового лога GSA нет — SER пишет строки только в окно сообщений "
-              "(правый клик по нему → «Log to file», чтобы включить файловый лог).")
-        return
-    newest = max(texts, key=lambda p: p.stat().st_mtime)
-    lines = _tail_text(newest)
-    n = int(getattr(args, "lines", None) or 300)
-    if getattr(args, "mail", False):
-        kw = ("e-mail", "email", "pop3", "verif", "activat", "confirm", "почт")
-        out = [ln for ln in lines if any(k in ln.lower() for k in kw)][-n:]
-        print(f"── GSA-лог {newest.name}: строки про почту/верификацию (посл. {len(out)}) ──")
+            # changes.log — релиз-ноутс самого GSA, к работе ноды отношения не имеет
+            texts += [p for p in d.glob("*.log") if p.name.lower() != "changes.log"]
+
+    # тейл лога печатаем ПЕРВЫМ: панель показывает только хвост вывода задания,
+    # и сводка по дампам (самое ценное) не должна из него вытесняться.
+    if texts:
+        newest = max(texts, key=lambda p: p.stat().st_mtime)
+        lines = _tail_text(newest)
+        n = int(getattr(args, "lines", None) or 300)
+        if getattr(args, "mail", False):
+            kw = ("e-mail", "email", "pop3", "verif", "activat", "confirm", "почт")
+            out = [ln for ln in lines if any(k in ln.lower() for k in kw)][-n:]
+            print(f"── GSA-лог {newest.name}: строки про почту/верификацию (посл. {len(out)}) ──")
+        else:
+            out = lines[-n:]
+            print(f"── GSA-лог {newest.name}: последние {len(out)} строк ──")
+        print("\n".join(out) if out else "(нет подходящих строк)")
     else:
-        out = lines[-n:]
-        print(f"── GSA-лог {newest.name}: последние {len(out)} строк ──")
-    print("\n".join(out) if out else "(нет подходящих строк)")
+        print("Текстового лога GSA нет — SER пишет строки только в окно сообщений "
+              "(правый клик по нему → «Log to file», чтобы включить файловый лог).")
+
+    for d, dumps in dump_dirs:
+        _dump_summary(d, dumps)
+    if not dump_dirs:
+        print("debug-папок с дампами не найдено "
+              "(debug-режим GSA выключен или дампы лежат в другом месте).")
 
 
 def _force_utf8_output() -> None:
