@@ -415,8 +415,9 @@ function KT(){ const m=curMode(),T=W.totals; return m?Object.assign({},T,
   {kpi_added:m.added,kpi_target:m.target,groups_closed:m.closed,groups_total:m.total,targets:m.targeted}):T; }
 function KG(){ const m=curMode(); return m?m.groups:W.groups; }
 const TGTf=r=>{ const t=r[4]; return (t&&typeof t==="object")?!!t[kmode]:!!t; };
-function renderModeSeg(){ const s=$("#kpimodeSeg"); if(!s)return; const m=curMode(); s.hidden=!m;
-  if(m) s.innerHTML=Object.keys(W.modes).map(k=>`<button data-m="${k}" class="${k===kmode?'on':''}">${MLBL[k]||k}</button>`).join(""); }
+function renderModeSeg(){ const s=$("#kpimodeSeg"); if(!s)return; const has=!!(W&&W.modes);
+  const wrap=s.closest(".kpimode-wrap")||s; wrap.hidden=!has;
+  if(has) s.innerHTML=Object.keys(W.modes).map(k=>`<button data-m="${k}" class="${k===kmode?'on':''}">${MLBL[k]||k}</button>`).join(""); }
 document.addEventListener("click",e=>{ const b=e.target.closest("#kpimodeSeg button"); if(!b)return;
   kmode=b.dataset.m; store.set("kpimode",kmode); renderModeSeg(); renderHero(); renderKpiPanel(); renderGroups(); renderGeo(); });
 
@@ -719,7 +720,7 @@ def _build_week(rep, wtotals, wdeltas, kpi_targets, kpi_files,
                 is_current=False, member_added=None, modes_cfg=None):
     member_added = member_added or {}
     files_by_mode = ({k: {f for kt in v for f in kt["buckets"]} for k, v in modes_cfg.items()}
-                     if (is_current and modes_cfg) else None)
+                     if modes_cfg else None)
     geo = []
     members_map = {}
     for fname, label in list(B.SUMMARY_ORDER) + [(B.NOT_STATED_FILE, "🏳 Не указано")]:
@@ -756,9 +757,10 @@ def _build_week(rep, wtotals, wdeltas, kpi_targets, kpi_files,
             "groups_total": len(kpi), "targets": sum(1 for g in geo if g[4]),
         },
     }
-    if is_current and modes_cfg:                              # богатый текущий: члены + режимы KPI
-        week["members"] = members_map
+    if modes_cfg:                                             # режимы KPI (для всех недель из отчётов)
         week["modes"] = {k: _mode_data(v, wdeltas) for k, v in modes_cfg.items()}
+    if is_current:                                            # раскрытие на страны — только текущая (живые члены)
+        week["members"] = members_map
     return week
 
 
@@ -776,10 +778,11 @@ def render_html(cfg, totals, reports, kpi_modes=None, member_added=None):
             wdeltas = member_added if member_added else weekly_deltas(totals, rep)
             weeks.append(_build_week(rep, wtotals, wdeltas, kpi_targets, kpi_files,
                                      is_current=True, member_added=member_added, modes_cfg=modes_cfg))
-        else:                      # исторические — из самого отчёта (totals+added как есть)
+        else:                      # исторические — из самого отчёта (totals+added как есть) + режимы KPI
             wtotals = {f: t for f, (t, a) in rep["per_file"].items()}
             wdeltas = {f: a for f, (t, a) in rep["per_file"].items()}
-            weeks.append(_build_week(rep, wtotals, wdeltas, kpi_targets, kpi_files))
+            weeks.append(_build_week(rep, wtotals, wdeltas, kpi_targets, kpi_files,
+                                     modes_cfg=modes_cfg))
     if not weeks:  # нет отчётов — одна неделя по живым бакетам без прироста
         weeks.append(_build_week({"date": "—", "per_file": {}, "servers": ""},
                                  totals, {f: 0 for f in totals}, kpi_targets, kpi_files,
