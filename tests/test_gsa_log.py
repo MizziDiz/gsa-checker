@@ -1,15 +1,8 @@
-"""--gsa-log: сводка по debug-папке GSA и тейл текстового лога."""
+"""--gsa-log: чтение debug-папки GSA SER (HTML-дампы проблемных целей)."""
 
 import types
 
 import gsa_checker
-
-
-def _run(monkeypatch, capsys, appdata, **kw):
-    monkeypatch.setenv("APPDATA", str(appdata))
-    args = types.SimpleNamespace(lines=kw.get("lines"), mail=kw.get("mail", False))
-    gsa_checker.cmd_gsa_log({}, args)
-    return capsys.readouterr().out
 
 
 def _debug_dir(tmp_path):
@@ -18,7 +11,14 @@ def _debug_dir(tmp_path):
     return d
 
 
-def test_summarises_html_dumps(tmp_path, monkeypatch, capsys):
+def _run(monkeypatch, capsys, appdata, cfg=None, **kw):
+    monkeypatch.setenv("APPDATA", str(appdata))
+    args = types.SimpleNamespace(lines=kw.get("lines"), mail=kw.get("mail", False))
+    gsa_checker.cmd_gsa_log(cfg or {}, args)
+    return capsys.readouterr().out
+
+
+def test_reads_appdata_debug_folder(tmp_path, monkeypatch, capsys):
     d = _debug_dir(tmp_path)
     (d / "site-a.ru_AB12.html").write_text("<html>Please solve the captcha</html>")
     (d / "site-a.ru_CD34.html").write_text("<html>403 Forbidden</html>")
@@ -26,66 +26,58 @@ def test_summarises_html_dumps(tmp_path, monkeypatch, capsys):
 
     out = _run(monkeypatch, capsys, tmp_path)
 
+    assert str(d) in out
     assert "файлов: 3" in out
     assert "уникальных доменов: 2" in out
     assert "2  site-a.ru" in out
     assert "капча" in out and "доступ запрещён" in out
     assert "пустых (0 байт" in out
+    assert "site-b.com_EF56.html" in out          # листинг новейших
 
 
-def test_text_log_tailed_and_dumps_not_counted_as_domains(tmp_path, monkeypatch, capsys):
+def test_config_dir_wins_over_appdata(tmp_path, monkeypatch, capsys):
+    _debug_dir(tmp_path)                          # стандартный путь тоже существует
+    custom = tmp_path / "custom-debug"
+    custom.mkdir()
+    (custom / "site-x.io_9911.html").write_text("<html>login required</html>")
+
+    out = _run(monkeypatch, capsys, tmp_path, cfg={"gsa_debug_dir": str(custom)})
+
+    assert str(custom) in out
+    assert "site-x.io_9911.html" in out
+
+
+def test_lines_limits_listing(tmp_path, monkeypatch, capsys):
     d = _debug_dir(tmp_path)
-    (d / "site-a.ru_AB12.html").write_text("<html>captcha</html>")
-    (d / "ser.log").write_text("line one\nline two\nline three\n")
+    for i in range(5):
+        (d / f"site-{i}.ru_AA{i}.html").write_text("<html>ok</html>")
 
     out = _run(monkeypatch, capsys, tmp_path, lines=2)
 
-    assert "уникальных доменов: 1" in out          # ser.log не домен
-    assert "GSA-лог ser.log" in out
-    assert "line three" in out and "line one" not in out
+    assert len([ln for ln in out.splitlines() if ln.strip().endswith(".html")]) == 2
 
 
-def test_mail_filter_selects_only_mail_lines(tmp_path, monkeypatch, capsys):
+def test_mail_filter_selects_dumps_with_mail_traces(tmp_path, monkeypatch, capsys):
     d = _debug_dir(tmp_path)
-    (d / "ser.log").write_text("submit ok\nPOP3 login failed\nnothing here\n")
+    (d / "forum.ru_AB12.html").write_text("<html>confirm your e-mail to activate</html>")
+    (d / "shop.ru_CD34.html").write_text("<html>nothing relevant here</html>")
 
     out = _run(monkeypatch, capsys, tmp_path, mail=True)
 
-    assert "POP3 login failed" in out
-    assert "submit ok" not in out
+    assert "forum.ru_AB12.html" in out
+    assert "shop.ru_CD34.html" not in out
 
 
-def test_no_logs_at_all_explains_where_to_enable(tmp_path, monkeypatch, capsys):
+def test_missing_folder_explains_where_to_look(tmp_path, monkeypatch, capsys):
+    out = _run(monkeypatch, capsys, tmp_path / "nope")
+
+    assert "debug-папка GSA не найдена" in out
+    assert "gsa_debug_dir" in out
+
+
+def test_empty_folder_is_reported(tmp_path, monkeypatch, capsys):
     _debug_dir(tmp_path)
 
     out = _run(monkeypatch, capsys, tmp_path)
 
-    assert "Log to file" in out
-
-
-def test_dump_summary_printed_after_log_tail(tmp_path, monkeypatch, capsys):
-    """Панель показывает только хвост вывода задания — сводка должна быть в конце."""
-    d = _debug_dir(tmp_path)
-    (d / "site-a.ru_AB12.html").write_text("<html>captcha</html>")
-    (d / "ser.log").write_text("line one\nline two\n")
-
-    out = _run(monkeypatch, capsys, tmp_path)
-
-    assert out.index("GSA-лог ser.log") < out.index("debug-папка")
-
-
-def test_changes_log_is_not_treated_as_a_log(tmp_path, monkeypatch, capsys):
-    """change.log/update.log — файлы установщика GSA, не лог работы."""
-    exe_dir = tmp_path / "app"
-    exe_dir.mkdir()
-    (exe_dir / "change.log").write_text("1.20 - new: first public release\n")
-    (exe_dir / "update.log").write_text("updater ran\n")
-    monkeypatch.setenv("APPDATA", str(tmp_path / "nope"))
-    import types as _t
-    gsa_checker.cmd_gsa_log({"gsa_exe_path": str(exe_dir / "ser.exe")},
-                            _t.SimpleNamespace(lines=None, mail=False))
-    out = capsys.readouterr().out
-
-    assert "first public release" not in out
-    assert "updater ran" not in out
-    assert "Log to file" in out
+    assert "пуста" in out

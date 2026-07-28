@@ -1761,25 +1761,6 @@ def cmd_check(cfg: dict) -> None:
             print(f"  {ext or '(без расширения)':<14} {n}")
 
 
-def _tail_text(path: Path, max_bytes: int = 2 * 1024 * 1024) -> list[str]:
-    """Последние max_bytes файла строками. Debug-логи GSA растут до сотен МБ —
-    целиком в память не читаем. UTF-16 (NUL в начале) декодируем как UTF-16."""
-    size = path.stat().st_size
-    with path.open("rb") as f:
-        if size > max_bytes:
-            f.seek(size - max_bytes)
-        data = f.read()
-    enc = "utf-16" if b"\x00" in data[:200] else "utf-8"
-    lines = data.decode(enc, "replace").splitlines()
-    if size > max_bytes and lines:
-        lines = lines[1:]                      # первая строка среза могла быть разрезана
-    return lines
-
-
-# Файлы установщика/апдейтера GSA рядом с exe: это релиз-ноутс и лог обновления,
-# к работе ноды отношения не имеют — тейлить их бессмысленно.
-SETUP_LOGS = frozenset({"change.log", "changes.log", "update.log", "install.log"})
-
 # Признаки причины неудачи в HTML-дампе GSA: подстрока в теле → человеческая метка.
 DUMP_SIGNS: tuple[tuple[str, str], ...] = (
     ("captcha", "капча"),
@@ -1800,11 +1781,45 @@ DUMP_SIGNS: tuple[tuple[str, str], ...] = (
     ("database error", "ошибка БД сайта"),
 )
 
+MAIL_WORDS = ("e-mail", "email", "pop3", "verif", "activat", "confirm", "почт")
 
-def _dump_summary(d: Path, files: list[Path], sample: int = 300) -> None:
-    """Сводка по debug-папке GSA: это не текстовый лог, а HTML-дампы страниц —
-    по файлу на проблемную цель. Печатает окно времени, топ-домены, долю пустых
-    (сайт не отдал контент) и распознанные причины по выборке новейших файлов."""
+
+def gsa_debug_dir(cfg: dict) -> Path | None:
+    """Папка дампов GSA SER. Приоритет: gsa_debug_dir из конфига, затем стандартная
+    %APPDATA%/GSA Search Engine Ranker/debug, затем debug/ рядом с projects/exe."""
+    cand: list[Path] = []
+    for key in ("gsa_debug_dir", "gsa_log_dir"):
+        if cfg.get(key):
+            cand.append(Path(cfg[key]))
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        cand.append(Path(appdata) / "GSA Search Engine Ranker" / "debug")
+    for key in ("gsa_projects_dir", "gsa_exe_path"):
+        if cfg.get(key):
+            cand.append(Path(cfg[key]).parent / "debug")
+    for d in cand:
+        if d.is_dir():
+            return d
+    return None
+
+
+def cmd_gsa_log(cfg: dict, args) -> None:
+    """Читает debug-папку GSA SER (read-only) — то, что GSA реально сохраняет на диск:
+    HTML-дампы страниц, по файлу на проблемную цель (имя = <домен>_<hex>.html).
+    Печатает листинг новейших файлов и сводку: окно времени, объём, топ-домены,
+    распознанные причины по выборке. С --mail — только дампы со следами почты
+    (регистрация/подтверждение). --lines задаёт длину листинга."""
+    d = gsa_debug_dir(cfg)
+    if d is None:
+        print("debug-папка GSA не найдена. Стандартный путь — "
+              "%APPDATA%\\GSA Search Engine Ranker\\debug; "
+              "если она в другом месте, задай gsa_debug_dir в data-конфиге.")
+        return
+    files = [p for p in d.iterdir() if p.is_file()]
+    if not files:
+        print(f"debug-папка {d} пуста (debug-режим GSA выключен или её почистили).")
+        return
+
     stats = sorted(((p, p.stat()) for p in files), key=lambda t: t[1].st_mtime, reverse=True)
     total_mb = sum(st.st_size for _, st in stats) / 1024 / 1024
     fmt = "%Y-%m-%d %H:%M"
@@ -1814,101 +1829,48 @@ def _dump_summary(d: Path, files: list[Path], sample: int = 300) -> None:
           f"старый: {time.strftime(fmt, time.localtime(stats[-1][1].st_mtime))}")
     empty = sum(1 for _, st in stats if st.st_size == 0)
     print(f"   пустых (0 байт — сайт не отдал страницу): {empty} "
-          f"({empty * 100 // max(len(stats), 1)}%)")
-
+          f"({empty * 100 // len(stats)}%)")
     exts = Counter(p.suffix.lower() or "(без расширения)" for p, _ in stats)
     print("   расширения: " + ", ".join(f"{e} ×{n}" for e, n in exts.most_common(6)))
 
-    # имя дампа = <домен>_<hex>.html; один домен многими файлами = упорно не берётся
+    # имя дампа = <домен>_<hex>.html; много файлов на домен = цель упорно не берётся
     hosts = Counter(p.name.rsplit("_", 1)[0] for p, _ in stats)
     print(f"   уникальных доменов: {len(hosts)}; топ-10 по числу дампов:")
     for host, n in hosts.most_common(10):
         print(f"      {n:5d}  {host}")
 
+    sample = 300
     reasons: Counter = Counter()
+    mail_hits: list[Path] = []
     for p, st in stats[:sample]:
         if st.st_size == 0:
             reasons["пусто (нет ответа)"] += 1
             continue
         try:
-            head = p.open("rb").read(8000).decode("utf-8", "replace").lower()
+            with p.open("rb") as f:
+                head = f.read(8000).decode("utf-8", "replace").lower()
         except OSError:
             continue
-        hit = {label for needle, label in DUMP_SIGNS if needle in head}
-        for label in hit or {"без явного признака"}:
+        for label in {lab for needle, lab in DUMP_SIGNS if needle in head} or {"без явного признака"}:
             reasons[label] += 1
+        if any(w in head for w in MAIL_WORDS):
+            mail_hits.append(p)
     print(f"   признаки по выборке из {min(sample, len(stats))} новейших "
           f"(файл может попасть в несколько категорий):")
     for label, n in reasons.most_common(12):
         print(f"      {n:5d}  {label}")
-    print("   ⚠ папку GSA не чистит сама — растёт бесконечно, чистить вручную.")
 
-
-def cmd_gsa_log(cfg: dict, args) -> None:
-    """Читает файловый лог GSA SER (read-only). Ищет логи в gsa_log_dir (конфиг),
-    %APPDATA%/GSA Search Engine Ranker/debug (туда пишет debug-режим GSA — берём
-    ЛЮБЫЕ файлы, не только *.log), а также <projects>/../{debug,log}, <projects>/..,
-    <gsa_exe>/{debug,log}, <gsa_exe>/.. (*.log). По debug-папке печатает СВОДКУ
-    (там HTML-дампы страниц, а не строки лога); по текстовому логу — последние N
-    строк новейшего, с --mail только строки про почту/верификацию."""
-    cand: list[Path] = []
-    if cfg.get("gsa_log_dir"):
-        cand.append(Path(cfg["gsa_log_dir"]))
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        cand.append(Path(appdata) / "GSA Search Engine Ranker" / "debug")
-    if cfg.get("gsa_projects_dir"):
-        base = Path(cfg["gsa_projects_dir"]).parent
-        cand += [base / "debug", base / "log", base]
-    if cfg.get("gsa_exe_path"):
-        base = Path(cfg["gsa_exe_path"]).parent
-        cand += [base / "debug", base / "log", base]
-    dirs, seen = [], set()
-    for d in cand:
-        if d.is_dir() and str(d) not in seen:
-            seen.add(str(d))
-            dirs.append(d)
-    # debug-папка — это дампы страниц (по файлу на проблемную цель), не строки лога:
-    # по ней даём сводку. Тейлить построчно имеет смысл только текстовые логи.
-    texts: list[Path] = []
-    dump_dirs: list[tuple[Path, list[Path]]] = []
-    for d in dirs:
-        if d.name.lower() == "debug":
-            files = [p for p in d.iterdir() if p.is_file()]
-            here_texts = [p for p in files if p.suffix.lower() in (".log", ".txt")]
-            dumps = [p for p in files if p not in here_texts]
-            if dumps:
-                dump_dirs.append((d, dumps))
-            texts += here_texts
-        else:
-            texts += [p for p in d.glob("*.log") if p.name.lower() not in SETUP_LOGS]
-
-    # тейл лога печатаем ПЕРВЫМ: панель показывает только хвост вывода задания,
-    # и сводка по дампам (самое ценное) не должна из него вытесняться.
-    if texts:
-        newest = max(texts, key=lambda p: p.stat().st_mtime)
-        lines = _tail_text(newest)
-        n = int(getattr(args, "lines", None) or 300)
-        if getattr(args, "mail", False):
-            kw = ("e-mail", "email", "pop3", "verif", "activat", "confirm", "почт")
-            out = [ln for ln in lines if any(k in ln.lower() for k in kw)][-n:]
-            print(f"── GSA-лог {newest.name}: строки про почту/верификацию (посл. {len(out)}) ──")
-        else:
-            out = lines[-n:]
-            print(f"── GSA-лог {newest.name}: последние {len(out)} строк ──")
-        print("\n".join(out) if out else "(нет подходящих строк)")
+    n = int(getattr(args, "lines", None) or 20)
+    if getattr(args, "mail", False):
+        print(f"   дампов со следами почты (из выборки): {len(mail_hits)}; первые {n}:")
+        listing = [(p, p.stat()) for p in mail_hits[:n]]
     else:
-        print("Текстового лога GSA нет — SER пишет строки только в окно сообщений "
-              "(правый клик по нему → «Log to file», чтобы включить файловый лог).")
-
-    for d, dumps in dump_dirs:
-        _dump_summary(d, dumps)
-    if not dump_dirs:
-        print("debug-папок с дампами не найдено "
-              "(debug-режим GSA выключен или дампы лежат в другом месте).")
-    print("── источники ──")
-    print("   просмотрено папок: " + (", ".join(str(d) for d in dirs) or "нет"))
-    print("   текстовые логи: " + (", ".join(sorted(p.name for p in texts)) or "нет"))
+        listing = stats[:n]
+        print(f"   новейшие {len(listing)} файлов:")
+    for p, st in listing:
+        print(f"      {time.strftime(fmt, time.localtime(st.st_mtime))}  "
+              f"{st.st_size / 1024:7.0f} КБ  {p.name}")
+    print("   ⚠ папку GSA не чистит сама — растёт бесконечно, чистить вручную.")
 
 
 def _force_utf8_output() -> None:
@@ -1933,10 +1895,11 @@ def main() -> None:
     ap.add_argument("--check", action="store_true",
                     help="диагностика путей и файлов")
     ap.add_argument("--gsa-log", action="store_true",
-                    help="показать файловый лог GSA SER (read-only)")
+                    help="прочитать debug-папку GSA SER: дампы проблемных целей (read-only)")
     ap.add_argument("--mail", action="store_true",
-                    help="с --gsa-log: только строки про почту/верификацию")
-    ap.add_argument("--lines", type=int, help="с --gsa-log: сколько строк (по умолчанию 300)")
+                    help="с --gsa-log: только дампы со следами почты/верификации")
+    ap.add_argument("--lines", type=int,
+                    help="с --gsa-log: сколько файлов в листинге (по умолчанию 20)")
     ap.add_argument("--stats", action="store_true",
                     help="снимок статистики по проектам (остаток/verified/…)")
     ap.add_argument("--report", action="store_true",
