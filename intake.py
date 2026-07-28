@@ -217,6 +217,17 @@ def _safe_label(url: str) -> str:
     return "".join(c for c in host if (c.isalnum() and c.isascii()) or c in ".-_") or "site"
 
 
+def _path_slug(url: str) -> str:
+    """ASCII-слаг пути URL для имени проекта (чтобы /a и /b одного домена не давали
+    одинаковое имя .prj и не затирали друг друга при импорте). '' для корня."""
+    path = (urlparse(url).path or "").strip("/")
+    if not path:
+        return ""
+    slug = "".join(c if ((c.isalnum() and c.isascii()) or c in "-_") else "-"
+                   for c in path.replace("/", "-"))
+    return slug.strip("-")[:40]
+
+
 def _ascii_country(task: dict) -> str:
     """ASCII-метка страны для имени проекта: стем файла-бакета (Malaysia.txt→Malaysia;
     у объединённых — первый). Русское имя региона в имя проекта не попадает."""
@@ -230,7 +241,9 @@ def _ascii_country(task: dict) -> str:
 
 def build_project(cfg: dict, task: dict) -> tuple[bool, str, str]:
     """Зовёт gsa_checker.py --create фикс. argv. → (ok, project_name, message)."""
-    project = f"boost - {_safe_label(task['url'])} - {_ascii_country(task)}"
+    slug = _path_slug(task["url"])
+    project = " - ".join(["boost", _safe_label(task["url"])]
+                         + ([slug] if slug else []) + [_ascii_country(task)])
     out_dir = cfg.get("intake_out_dir") or "/srv/share/intake/pending"
     template = cfg.get("intake_template") or cfg.get("gsa_template_prj") or DEFAULT_TEMPLATE
     buckets_ = task["buckets"]

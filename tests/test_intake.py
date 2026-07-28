@@ -78,6 +78,15 @@ def test_safe_label():
     assert intake._safe_label("https://сайт.рф/x").isascii()
 
 
+def test_path_slug():
+    # разные страницы одного домена дают разный слаг → разные имена .prj
+    assert intake._path_slug("https://x.com/minimum-deposit") == "minimum-deposit"
+    assert intake._path_slug("https://x.com/a/b-c") == "a-b-c"
+    assert intake._path_slug("https://x.com/") == ""          # корень
+    assert intake._path_slug("https://x.com") == ""
+    assert intake._path_slug("https://x.com/Логин").isascii()  # не-ASCII вычищается
+
+
 def test_ascii_country_from_bucket():
     # русское имя региона в имя проекта не идёт — берём ASCII-стем бакета
     assert intake._ascii_country({"buckets": ["/x/Malaysia.txt"]}) == "Malaysia"
