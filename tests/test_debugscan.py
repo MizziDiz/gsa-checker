@@ -119,3 +119,16 @@ def test_unexpanded_spin_macro_in_address_is_flagged(tmp_path):
 
     assert st["mail_addr_unique"] == 2
     assert dict(st["mail_macro_unexpanded"]) == {"%spinfile-names.dat%@graniteloom.com": 1}
+
+
+def test_mail_sign_counted_as_ours_only_with_our_address(tmp_path):
+    """Шаблон валидации без нашего адреса — не реакция на наш адрес."""
+    (tmp_path / "real.ru_AA11.html").write_text(
+        "<html>invalid email: bob@graniteloom.com</html>")
+    (tmp_path / "tpl.ru_BB22.html").write_text(
+        "<html><script>msg='Please enter a valid email address'</script></html>")
+
+    st = debugscan.scan(tmp_path, mail_domain="graniteloom.com")
+
+    assert dict(st["mail_signs"])["адрес отклонён как некорректный"] == 2
+    assert dict(st["mail_signs_with_addr"])["адрес отклонён как некорректный"] == 1

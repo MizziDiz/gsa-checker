@@ -202,6 +202,7 @@ def scan(directory: Path, head_bytes: int = HEAD_BYTES,
     domain_hits = 0
     domain_hosts: Counter = Counter()
     mail_addrs: Counter = Counter()
+    mail_signs_with_addr: Counter = Counter()
     macro_raw: Counter = Counter()
     host_signs: dict[str, Counter] = {}
     digests: Counter = Counter()
@@ -258,6 +259,11 @@ def scan(directory: Path, head_bytes: int = HEAD_BYTES,
             mail_signs[label] += 1
         if mail_hit:
             mail_hosts[host] += 1
+        # сообщение про почту + НАШ адрес на той же странице = реакция именно на наш
+        # адрес; без адреса это, скорее всего, шаблон JS-валидации пустой формы
+        if mail_hit and mail_domain and mail_domain in head:
+            for label in mail_hit:
+                mail_signs_with_addr[label] += 1
         if mail_domain and mail_domain in head:
             domain_hits += 1
             domain_hosts[host] += 1
@@ -306,6 +312,7 @@ def scan(directory: Path, head_bytes: int = HEAD_BYTES,
         "mail_domain": mail_domain or "",
         "mail_domain_hits": domain_hits,
         "mail_domain_hosts": domain_hosts.most_common(20),
+        "mail_signs_with_addr": mail_signs_with_addr.most_common(),
         "mail_addr_samples": mail_addrs.most_common(25),
         "mail_addr_unique": len(mail_addrs),
         "mail_macro_unexpanded": macro_raw.most_common(10),

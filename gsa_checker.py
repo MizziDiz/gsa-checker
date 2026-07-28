@@ -1856,6 +1856,8 @@ def _scan_report_text(st: dict) -> str:
         f"{st['mail_domain_hits']}")
     if st["mail_domain_hosts"]:
         add("  где именно: " + ", ".join(f"{h} ×{n}" for h, n in st["mail_domain_hosts"]))
+    add("  из них с НАШИМ адресом на той же странице (т.е. реакция именно на него): "
+        + (", ".join(f"{k} ×{v}" for k, v in st["mail_signs_with_addr"]) or "нет"))
     add(f"  уникальных наших адресов в дампах: {st['mail_addr_unique']}")
     if st["mail_addr_samples"]:
         add("  примеры адресов: "
@@ -1959,6 +1961,7 @@ def cmd_gsa_log(cfg: dict, args) -> None:
     top("причины", st["signs"], 8)
     top("вход", st["login_wall"], 4)
     top("почта", st["mail_signs"], 5)
+    top("почта (с нашим адресом на странице)", st["mail_signs_with_addr"], 4)
     print(f"   наш домен {st['mail_domain'] or '(не задан)'} в дампах: "
           f"{st['mail_domain_hits']}, уникальных адресов: {st['mail_addr_unique']}"
           + (f", НЕРАСКРЫТЫХ макросов: {sum(n for _, n in st['mail_macro_unexpanded'])}"
