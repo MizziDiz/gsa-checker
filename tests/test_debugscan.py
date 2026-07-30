@@ -201,4 +201,27 @@ def test_page_without_sitekey_is_counted(tmp_path):
     st = debugscan.scan(tmp_path)
 
     assert st["recaptcha_pages"] == 1
-    assert dict(st["sitekey_kinds"])["нет sitekey на странице"] == 1
+    assert dict(st["sitekey_kinds"])["нет sitekey во всём файле"] == 1
+
+
+def test_render_mode_is_not_a_sitekey():
+    """api.js?render=explicit — режим виджета, а не ключ."""
+    assert debugscan.sitekeys('<script src="api.js?render=explicit">') == []
+    assert debugscan.sitekeys('<script src="api.js?render=auto">') == []
+    good = "6LcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    assert debugscan.sitekeys(f'<script src="api.js?render={good}">') == [good]
+
+
+def test_sitekey_found_below_head_is_not_reported_missing(tmp_path):
+    """Ключ ниже прочитанной головы должен находиться дочитыванием файла."""
+    good = "6LcDEEPAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    body = ('<html><script src="https://www.google.com/recaptcha/api.js"></script>'
+            + "<!-- padding " + "x" * 5000 + " -->"
+            + f'<div class="g-recaptcha" data-sitekey="{good}"></div></html>')
+    (tmp_path / "deep.ru_AA11.html").write_text(body)
+
+    st = debugscan.scan(tmp_path, head_bytes=1024)
+
+    assert st["sitekey_found_deep"] == 1
+    assert dict(st["sitekey_kinds"]).get("нет sitekey во всём файле") is None
+    assert dict(st["sitekey_kinds"])["валидный (reCAPTCHA v2)"] == 1

@@ -178,6 +178,8 @@ _SITEKEY_RES = (
     re.compile(r"""[?&]k=([^"'&<>\s]{0,120})""", re.I),
     re.compile(r"""api\.js\?render=([^"'&<>\s]{0,120})""", re.I),
 )
+# значения параметра render= у api.js — это режим виджета, а НЕ sitekey
+RENDER_NON_KEYS = frozenset({"explicit", "auto", "onload"})
 # валидный ключ Google: 40 символов, начинается с 6L
 _V2_KEY_RE = re.compile(r"^6[0-9A-Za-z_-]{39}$")
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
@@ -215,7 +217,7 @@ def sitekeys(head: str) -> list[str]:
     for rx in _SITEKEY_RES:
         for m in rx.finditer(head):
             key = m.group(1).strip()
-            if key and key not in out:
+            if key and key.lower() not in RENDER_NON_KEYS and key not in out:
                 out.append(key)
     return out
 
@@ -265,7 +267,7 @@ def login_wall(head: str) -> str:
 
 
 def scan(directory: Path, head_bytes: int = HEAD_BYTES,
-         mail_domain: str | None = None) -> dict:
+         mail_domain: str | None = None, deep_bytes: int = 1_048_576) -> dict:
     """Полный проход по всем файлам папки. Возвращает словарь статистики.
 
     mail_domain — домен catch-all (напр. graniteloom.com): если он встретился в
@@ -300,6 +302,7 @@ def scan(directory: Path, head_bytes: int = HEAD_BYTES,
     sitekey_kinds: Counter = Counter()
     sitekey_values: Counter = Counter()
     sitekey_cases: list[dict] = []
+    deep_found = 0
     macro_raw: Counter = Counter()
     host_signs: dict[str, Counter] = {}
     digests: Counter = Counter()
@@ -354,11 +357,21 @@ def scan(directory: Path, head_bytes: int = HEAD_BYTES,
         if "recaptcha" in head or "sitekey" in head:
             pages_with_recaptcha += 1
             keys = sitekeys(text)   # ключ регистрозависим — берём исходный текст
+            if not keys and st.st_size > len(raw):
+                # ключ может лежать ниже прочитанной «головы» — дочитываем файл
+                try:
+                    with p.open("rb") as f:
+                        full = f.read(deep_bytes).decode("utf-8", "replace")
+                    keys = sitekeys(full)
+                    if keys:
+                        deep_found += 1
+                except OSError:
+                    pass
             if not keys:
-                sitekey_kinds["нет sitekey на странице"] += 1
+                sitekey_kinds["нет sitekey во всём файле"] += 1
                 if len(sitekey_cases) < 40:
                     sitekey_cases.append({"host": host, "file": p.name,
-                                          "key": "", "kind": "нет sitekey на странице"})
+                                          "key": "", "kind": "нет sitekey во всём файле"})
             for key in keys[:3]:
                 kind = classify_sitekey(key, head)
                 sitekey_kinds[kind] += 1
@@ -430,6 +443,7 @@ def scan(directory: Path, head_bytes: int = HEAD_BYTES,
         "all_hosts": dict(hosts),          # для сверки со списками .success
         "login_wall": walls.most_common(),
         "recaptcha_pages": pages_with_recaptcha,
+        "sitekey_found_deep": deep_found,
         "sitekey_kinds": sitekey_kinds.most_common(),
         "sitekey_unique": len(sitekey_values),
         "sitekey_top": sitekey_values.most_common(15),

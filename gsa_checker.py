@@ -1882,7 +1882,8 @@ def _scan_report_text(st: dict) -> str:
     block("Капчи:", st["captchas"])
     add("")
     add(f"reCAPTCHA: страниц с капчей {st['recaptcha_pages']}, "
-        f"уникальных sitekey {st['sitekey_unique']}")
+        f"уникальных sitekey {st['sitekey_unique']}, "
+        f"ключ нашёлся только при полном чтении файла: {st['sitekey_found_deep']}")
     for name, cnt in st["sitekey_kinds"]:
         add(f"  {cnt:6d}  {name}")
     if st["sitekey_cases"]:
@@ -1985,7 +1986,8 @@ def cmd_gsa_log(cfg: dict, args) -> None:
     top("движки", st["engines"], 6)
     top("капчи", st["captchas"], 5)
     print(f"   reCAPTCHA-страниц: {st['recaptcha_pages']}, "
-          f"уникальных sitekey: {st['sitekey_unique']}")
+          f"уникальных sitekey: {st['sitekey_unique']}, "
+          f"найдено дочитыванием: {st['sitekey_found_deep']}")
     top("sitekey", st["sitekey_kinds"], 6)
     top("зоны", st["tlds"], 8)
     top("языки", st["langs"], 6)
