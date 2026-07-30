@@ -1880,6 +1880,15 @@ def _scan_report_text(st: dict) -> str:
     block("Зоны (TLD):", st["tlds"])
     block("Движки сайтов:", st["engines"])
     block("Капчи:", st["captchas"])
+    add("")
+    add(f"reCAPTCHA: страниц с капчей {st['recaptcha_pages']}, "
+        f"уникальных sitekey {st['sitekey_unique']}")
+    for name, cnt in st["sitekey_kinds"]:
+        add(f"  {cnt:6d}  {name}")
+    if st["sitekey_cases"]:
+        add("  примеры негодных ключей:")
+        for c in st["sitekey_cases"][:25]:
+            add(f"     [{c['kind']}] {c['host']}: {c['key'] or '—'}")
     block("Языки страниц:", st["langs"])
     block("Расширения файлов:", st["exts"])
     block("Частые заголовки страниц:", st["titles"])
@@ -1975,6 +1984,9 @@ def cmd_gsa_log(cfg: dict, args) -> None:
              if st["mail_macro_unexpanded"] else ""))
     top("движки", st["engines"], 6)
     top("капчи", st["captchas"], 5)
+    print(f"   reCAPTCHA-страниц: {st['recaptcha_pages']}, "
+          f"уникальных sitekey: {st['sitekey_unique']}")
+    top("sitekey", st["sitekey_kinds"], 6)
     top("зоны", st["tlds"], 8)
     top("языки", st["langs"], 6)
     top("топ-доменов", st["hosts"], 6)

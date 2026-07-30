@@ -165,3 +165,40 @@ def test_js_validator_templates_are_not_mail_errors():
     assert debugscan.mail_hits(
         "to complete your registration, please check your email for account activation"
     ) == {"ждёт подтверждения по почте"}
+
+
+def test_sitekey_classification():
+    """«bad sitekey» у решалки — это формат ключа: проверяем разбор."""
+    good = "6LcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    assert len(good) == 40
+    assert debugscan.classify_sitekey(good) == "валидный (reCAPTCHA v2)"
+    assert debugscan.classify_sitekey(good, "api.js?render=" + good) == \
+        "валидный формат, но reCAPTCHA v3 (invisible)"
+    assert debugscan.classify_sitekey(good, "recaptcha/enterprise.js") == \
+        "валидный формат, но reCAPTCHA Enterprise"
+    assert debugscan.classify_sitekey("") == "пустой sitekey"
+    assert debugscan.classify_sitekey("6LcAAA") == "обрезанный/битый ключ (6 симв.)"
+    assert debugscan.classify_sitekey("{{ site_key }}") == "шаблон движка, ключ не подставлен"
+    assert debugscan.classify_sitekey(
+        "0x4AAAAAAABBBB") == "Turnstile (не reCAPTCHA)"
+    assert debugscan.classify_sitekey(
+        "12345678-1234-1234-1234-123456789abc") == "hCaptcha (не reCAPTCHA)"
+
+
+def test_sitekeys_extracted_from_all_places():
+    html = ('<div class="g-recaptcha" data-sitekey="6LcKEY1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA">'
+            '<iframe src="https://google.com/recaptcha/api2/anchor?k=6LcKEY2AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA">')
+    keys = debugscan.sitekeys(html)
+    assert keys[0].startswith("6LcKEY1")
+    assert any(k.startswith("6LcKEY2") for k in keys)
+
+
+def test_page_without_sitekey_is_counted(tmp_path):
+    (tmp_path / "forum.ru_AA11.html").write_text(
+        '<html><script src="https://www.google.com/recaptcha/api.js"></script>'
+        '<div class="g-recaptcha"></div></html>')
+
+    st = debugscan.scan(tmp_path)
+
+    assert st["recaptcha_pages"] == 1
+    assert dict(st["sitekey_kinds"])["нет sitekey на странице"] == 1

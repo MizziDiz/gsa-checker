@@ -171,6 +171,16 @@ CAPTCHAS: tuple[tuple[str, str], ...] = (
 )
 
 _TAGS_RE = re.compile(r"<[^>]+>")
+# sitekey reCAPTCHA: в data-атрибуте, в JS-параметре или в src iframe (?k=…)
+_SITEKEY_RES = (
+    re.compile(r"""data-sitekey\s*=\s*["']([^"'<>]{0,120})["']""", re.I),
+    re.compile(r"""["']?sitekey["']?\s*[:=]\s*["']([^"'<>]{0,120})["']""", re.I),
+    re.compile(r"""[?&]k=([^"'&<>\s]{0,120})""", re.I),
+    re.compile(r"""api\.js\?render=([^"'&<>\s]{0,120})""", re.I),
+)
+# валидный ключ Google: 40 символов, начинается с 6L
+_V2_KEY_RE = re.compile(r"^6[0-9A-Za-z_-]{39}$")
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.S)
 _LANG_RE = re.compile(r"<html[^>]*\blang=[\"']?([a-zA-Z-]{2,8})")
 
@@ -197,6 +207,45 @@ def snippet(head: str, needle: str, width: int = 90) -> str:
         return ""
     chunk = head[max(0, i - width): i + len(needle) + width]
     return " ".join(_TAGS_RE.sub(" ", chunk).split())
+
+
+def sitekeys(head: str) -> list[str]:
+    """Все sitekey, которые можно вытащить со страницы (в порядке появления)."""
+    out: list[str] = []
+    for rx in _SITEKEY_RES:
+        for m in rx.finditer(head):
+            key = m.group(1).strip()
+            if key and key not in out:
+                out.append(key)
+    return out
+
+
+def classify_sitekey(key: str, head: str = "") -> str:
+    """Почему решалка может ответить «bad sitekey»: смотрим на сам ключ.
+
+    XEvil/antigate-API проверяет формат ключа: у Google это ровно 40 символов,
+    начинающихся с «6L». Всё остальное — обрезанный, экранированный, шаблон
+    движка или ключ другого типа капчи — уходит как заведомо негодный.
+    """
+    if not key:
+        return "пустой sitekey"
+    if _V2_KEY_RE.match(key):
+        if "recaptcha/enterprise" in head:
+            return "валидный формат, но reCAPTCHA Enterprise"
+        if "api.js?render=" + key in head:
+            return "валидный формат, но reCAPTCHA v3 (invisible)"
+        return "валидный (reCAPTCHA v2)"
+    if _UUID_RE.match(key):
+        return "hCaptcha (не reCAPTCHA)"
+    if key.startswith("0x"):
+        return "Turnstile (не reCAPTCHA)"
+    if "%" in key or "{" in key or "$" in key or "sitekey" in key.lower():
+        return "шаблон движка, ключ не подставлен"
+    if "&" in key or ";" in key:
+        return "html-экранирование внутри ключа"
+    if key.startswith("6") and len(key) != 40:
+        return f"обрезанный/битый ключ ({len(key)} симв.)"
+    return f"неизвестный формат ({len(key)} симв.)"
 
 
 def login_wall(head: str) -> str:
@@ -247,6 +296,10 @@ def scan(directory: Path, head_bytes: int = HEAD_BYTES,
     mail_addrs: Counter = Counter()
     mail_signs_with_addr: Counter = Counter()
     mail_cases: list[dict] = []
+    pages_with_recaptcha = 0
+    sitekey_kinds: Counter = Counter()
+    sitekey_values: Counter = Counter()
+    sitekey_cases: list[dict] = []
     macro_raw: Counter = Counter()
     host_signs: dict[str, Counter] = {}
     digests: Counter = Counter()
@@ -297,6 +350,22 @@ def scan(directory: Path, head_bytes: int = HEAD_BYTES,
         for needle, label in CAPTCHAS:
             if needle in head:
                 captchas[label] += 1
+
+        if "recaptcha" in head or "sitekey" in head:
+            pages_with_recaptcha += 1
+            keys = sitekeys(text)   # ключ регистрозависим — берём исходный текст
+            if not keys:
+                sitekey_kinds["нет sitekey на странице"] += 1
+                if len(sitekey_cases) < 40:
+                    sitekey_cases.append({"host": host, "file": p.name,
+                                          "key": "", "kind": "нет sitekey на странице"})
+            for key in keys[:3]:
+                kind = classify_sitekey(key, head)
+                sitekey_kinds[kind] += 1
+                sitekey_values[key] += 1
+                if not kind.startswith("валидный") and len(sitekey_cases) < 40:
+                    sitekey_cases.append({"host": host, "file": p.name,
+                                          "key": key[:80], "kind": kind})
 
         mail_hit = mail_hits(head)
         for label in mail_hit:
@@ -360,6 +429,11 @@ def scan(directory: Path, head_bytes: int = HEAD_BYTES,
         "hosts": hosts.most_common(30),
         "all_hosts": dict(hosts),          # для сверки со списками .success
         "login_wall": walls.most_common(),
+        "recaptcha_pages": pages_with_recaptcha,
+        "sitekey_kinds": sitekey_kinds.most_common(),
+        "sitekey_unique": len(sitekey_values),
+        "sitekey_top": sitekey_values.most_common(15),
+        "sitekey_cases": sitekey_cases,
         "mail_signs": mail_signs.most_common(),
         "mail_hosts": mail_hosts.most_common(20),
         "mail_domain": mail_domain or "",
