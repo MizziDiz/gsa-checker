@@ -336,6 +336,41 @@ def group_total(group_file: str, counts: dict) -> int:
     return counts.get(group_file, 0) + sum(counts.get(m, 0) for m in GROUP_MEMBERS.get(group_file, ()))
 
 
+# ====== МАКРО-РЕГИОНЫ (регион → все страны) для сводного вида отчёта/сайта ======
+# базовые файлы региона; страны-члены сплита разворачиваются автоматически.
+REGION_GROUPS = [
+    ("🌎 Латинская Америка", ["latam.txt", "Argentina.txt", "brazil.txt", "Colombia.txt",
+                              "Chile.txt", "Peru.txt", "Ecuador.txt", "Uruguay.txt", "Mexic.txt"]),
+    ("🇺🇸 Северная Америка", ["USA.txt"]),
+    ("🇪🇺 Европа", ["Europe-Other.txt", "France.txt", "Germany.txt", "Spain.txt", "Italy.txt",
+                    "Poland.txt", "Portugal.txt", "UK.txt", "turkish.txt"]),
+    ("🌐 СНГ", ["sng.txt", "Russia.txt"]),
+    ("🌍 Африка", ["africa.txt", "Other-Africa.txt"]),
+    ("🌍 Арабские страны", ["arabic.txt"]),
+    ("🌏 Азия", ["Asia-other.txt", "china-mix.txt", "japanese.txt", "Korea.txt", "Indonesia.txt",
+                "Malaysia.txt", "Singapore.txt", "thai.txt", "vietnam.txt", "India.txt",
+                "pakistan.txt", "Philippines.txt"]),
+    ("🌊 Океания", ["australia.txt"]),
+]
+
+
+def region_country_files(bases) -> list:
+    """Базовые файлы региона → полный список файлов-стран (база + её страны-члены), с дедупом."""
+    out = []
+    for b in bases:
+        out.append(b)
+        out.extend(sorted(GROUP_MEMBERS.get(b, ())))
+    return list(dict.fromkeys(out))
+
+
+def country_display(fname: str) -> tuple:
+    """(флаг, имя) для файла-страны: из SUMMARY_ORDER либо стем файла-члена."""
+    lbl = {f: la for f, la in SUMMARY_ORDER}.get(fname)
+    if lbl:
+        return (lbl.split(" ", 1)[0], lbl.split(" ", 1)[1]) if " " in lbl else ("", lbl)
+    return ("", fname[:-4] if fname.endswith(".txt") else fname)
+
+
 def read_membership(out_dir):
     """Читает базу out_country_buckets: множество URL в каждом файле + общее множество
     (для дедупа per-file и global, как в split1404)."""

@@ -744,27 +744,32 @@ def _build_week(rep, wtotals, wdeltas, kpi_targets, kpi_files,
                      if modes_cfg else None)
     geo = []
     members_map = {}
-    for fname, label in list(B.SUMMARY_ORDER) + [(B.NOT_STATED_FILE, "🏳 Не указано")]:
-        flag, name = split_label(label)
-        if is_current and fname in B.GROUP_MEMBERS:          # смешанная группа → агрегируем
-            total = B.group_total(fname, wtotals)
-            delta = _grp_add([fname], wdeltas)
+    if is_current:            # текущая неделя: макро-регионы, каждый раскрывается на все свои страны
+        rows = list(B.REGION_GROUPS) + [("🏳 Не указано", [B.NOT_STATED_FILE])]
+        for region_label, bases in rows:
+            flag, name = split_label(region_label)
+            files = B.region_country_files(bases)
+            total = sum(wtotals.get(f, 0) for f in files)
+            delta = sum(wdeltas.get(f, 0) for f in files)
             mem = []
-            for mf in B.GROUP_MEMBERS[fname]:
-                mt = wtotals.get(mf, 0)
-                if mt:
-                    cn = mf[:-4]
-                    mem.append([_flag(cn), cn, mt, int(member_added.get(mf, 0))])
-            res = wtotals.get(fname, 0)
-            if res:
-                mem.append(["🌐", "прочие (gTLD/vanity)", res, int(member_added.get(fname, 0))])
+            for f in files:
+                ft = wtotals.get(f, 0)
+                if ft:
+                    cflag, cname = B.country_display(f)
+                    mem.append([cflag or "🏳", cname, ft, int(member_added.get(f, 0))])
             mem.sort(key=lambda x: -x[2])
-            members_map[name] = mem
-        else:
+            if len(mem) > 1:              # раскрытие — только у регионов с >1 страны
+                members_map[name] = mem
+            tgt = ({k: any(f in fs for f in files) for k, fs in files_by_mode.items()}
+                   if files_by_mode else any(f in kpi_files for f in files))
+            geo.append([flag, name, total, delta, tgt])
+    else:                     # прошлые недели — снапшот по SUMMARY_ORDER (как сохранён)
+        for fname, label in list(B.SUMMARY_ORDER) + [(B.NOT_STATED_FILE, "🏳 Не указано")]:
+            flag, name = split_label(label)
             total, delta = wtotals.get(fname, 0), wdeltas.get(fname, 0)
-        tgt = ({k: (fname in fs) for k, fs in files_by_mode.items()}
-               if files_by_mode else (fname in kpi_files))
-        geo.append([flag, name, total, delta, tgt])
+            tgt = ({k: (fname in fs) for k, fs in files_by_mode.items()}
+                   if files_by_mode else (fname in kpi_files))
+            geo.append([flag, name, total, delta, tgt])
     kpi = compute_kpi(kpi_targets, wdeltas)
     groups = [[*split_label(r["label"]), r["added"], r["target"]] for r in kpi]
     week = {
