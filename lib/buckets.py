@@ -363,9 +363,23 @@ def region_country_files(bases) -> list:
     return list(dict.fromkeys(out))
 
 
+# остаточные (gTLD/vanity) файлы сплит-групп — метка «<регион> gTLD» (не «Другие страны»):
+# там нет странового ccTLD, разложить нечем (только GeoIP по хостингу, а он врёт).
+RESIDUAL_LABELS = {
+    "Europe-Other.txt": "🇪🇺 Европа gTLD",
+    "Asia-other.txt":   "🌏 Азия gTLD",
+    "Other-Africa.txt": "🌍 Африка (острова) gTLD",
+    "africa.txt":       "🌍 Африка gTLD",
+    "latam.txt":        "🌎 Латам gTLD",
+    "arabic.txt":       "🌍 Арабские gTLD",
+    "sng.txt":          "🌐 СНГ gTLD",
+    "china-mix.txt":    "🇨🇳 Китай gTLD",
+}
+
+
 def country_display(fname: str) -> tuple:
-    """(флаг, имя) для файла-страны: из SUMMARY_ORDER либо стем файла-члена."""
-    lbl = {f: la for f, la in SUMMARY_ORDER}.get(fname)
+    """(флаг, имя) для файла-страны: остаток → «<регион> gTLD»; иначе SUMMARY_ORDER / стем."""
+    lbl = RESIDUAL_LABELS.get(fname) or {f: la for f, la in SUMMARY_ORDER}.get(fname)
     if lbl:
         return (lbl.split(" ", 1)[0], lbl.split(" ", 1)[1]) if " " in lbl else ("", lbl)
     return ("", fname[:-4] if fname.endswith(".txt") else fname)
