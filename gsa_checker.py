@@ -475,6 +475,48 @@ def _kpi_report(cfg: dict, added: dict):
     return out
 
 
+def _region_report_text(cfg: dict, totals: dict, added: dict) -> str:
+    """Сводный вид: макро-регион → все его страны (накоплено (+прирост)). HTML для Telegram."""
+    from lib import buckets as _B
+
+    def fa(n):
+        return f"(+{n})" if n else "(+)"
+    lines, gt, ga = [], 0, 0
+    for region, bases in _B.REGION_GROUPS:
+        files = _B.region_country_files(bases)
+        rt = sum(totals.get(f, 0) for f in files)
+        ra = sum(int(added.get(f, 0)) for f in files)
+        gt += rt
+        ga += ra
+        lines.append(f"\n<b>{region} — {rt} {fa(ra)}</b>")
+        for f, t, a in sorted(((f, totals.get(f, 0), int(added.get(f, 0))) for f in files),
+                              key=lambda x: -x[1]):
+            if t:
+                _, nm = _B.country_display(f)
+                lines.append(f"  {nm}: {t} {fa(a)}")
+    ns = totals.get(_B.NOT_STATED_FILE, 0)
+    lines.append(f"\n<b>🏳 Не указано — {ns} {fa(int(added.get(_B.NOT_STATED_FILE, 0)))}</b>")
+    head = (f"🗺 <b>GSA verified — по регионам и странам</b> ({telegram_label(cfg)})\n"
+            f"Всего в базе: <b>{gt + ns}</b> · прирост: <b>+{ga + int(added.get(_B.NOT_STATED_FILE, 0))}</b>\n")
+    return head + "\n".join(lines)
+
+
+def _send_chunked(cfg: dict, text: str, limit: int = 3800) -> None:
+    """Отправка длинного текста в Telegram частями по строкам (лимит ~4096)."""
+    from lib import telegram
+    parts, cur = [], ""
+    for ln in text.split("\n"):
+        if len(cur) + len(ln) + 1 > limit:
+            parts.append(cur)
+            cur = ln
+        else:
+            cur = (cur + "\n" + ln) if cur else ln
+    if cur:
+        parts.append(cur)
+    for p in parts:
+        telegram.send(cfg, p)
+
+
 def _collection_status(cfg: dict):
     """Свежесть выгрузки .success по серверам (для центрального мержа на шаре): по каждой
     подпапке success_share_dir смотрит метку `_collected.txt`. Возвращает список
@@ -670,6 +712,11 @@ def cmd_report(cfg: dict, args) -> None:
                   "totals": {k: int(post.get(k, 0)) for k in buckets.all_bucket_files()}}
         rep.with_suffix(".detail.json").write_text(
             json.dumps(detail, ensure_ascii=False), encoding="utf-8")
+        # сводный вид «регион → страны» — файл (имя вне маски gsa_report_*, не парсится как неделя)
+        reg_txt = _region_report_text(cfg, post, added)
+        (out_dir / f"region_breakdown_{stamp}.txt").write_text(
+            reg_txt.replace("<b>", "").replace("</b>", ""), encoding="utf-8")
+        print(f"✓ по регионам: {out_dir / f'region_breakdown_{stamp}.txt'}")
 
     # KPI-текст считаем всегда (для консоли), но ОТПРАВКУ в Telegram — только в боевом
     # прогоне: --dry-run ничего наружу не шлёт.
@@ -694,6 +741,8 @@ def cmd_report(cfg: dict, args) -> None:
     # Telegram, сообщение 2 — недобор по KPI (только если задан kpi_targets)
     if kpi:
         telegram.send(cfg, kpi)
+    # Telegram, сообщение 3 — сводный вид «регион → все страны» (частями)
+    _send_chunked(cfg, _region_report_text(cfg, post, added))
 
 
 def cmd_ui_export(cfg: dict, args) -> None:
