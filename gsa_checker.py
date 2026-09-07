@@ -1445,7 +1445,7 @@ def _snapshot_projects(cfg: dict, prj_files: list, tag: str = "") -> "Path | Non
     случай (в отличие от .prj.bak, который перезаписывается). Прунит старые снимки до
     backup_keep. Возвращает путь снимка или None (если backup_dir не задан)."""
     import shutil
-    root = cfg.get("backup_dir", "")
+    root = _backup_root(cfg)
     if not root or not prj_files:
         return None
     server = str(cfg.get("server_name", "gsa")).strip() or "gsa"
@@ -1482,10 +1482,126 @@ def _stamp_notes(prj, text: str) -> None:
     prj.set_value("Options", "notes", (cur + "\\n" + stamp) if cur else stamp)
 
 
+def _backup_root(cfg: dict) -> str:
+    """Куда класть снимки: backup_dir из конфига, а если он не задан — папка
+    gsa_project_backups рядом с success_share_dir на шаре. Так узел без backup_dir
+    всё равно кладёт снимки туда, где их видит сервер (07.09: gsa-03 отвечал
+    «Не задан backup_dir», и свежих .prj с него было не снять)."""
+    root = str(cfg.get("backup_dir", "") or "").strip()
+    if root:
+        return root
+    share = str(cfg.get("success_share_dir", "") or "").strip()
+    if share:
+        from pathlib import PureWindowsPath
+        base = PureWindowsPath(share) if "\\" in share else Path(share)
+        return str(base.parent / "gsa_project_backups")
+    return ""
+
+
+_SITELIST_KEYS = ("use site list", "use site list type", "user defined site list")
+
+
+def _dir_listing(d: Path, limit: int = 15) -> list[str]:
+    """Строки описи одной папки: число файлов, объём, свежайшие файлы с датами
+    (местное время узла)."""
+    try:
+        files = [f for f in d.iterdir() if f.is_file()]
+    except OSError as e:
+        return [f"  <не прочитана: {e}>"]
+    stats = []
+    for f in files:
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        stats.append((st.st_mtime, st.st_size, f.name))
+    stats.sort(reverse=True)
+    total = sum(s[1] for s in stats)
+    out = [f"  файлов {len(stats)}, {total / 1e6:.1f} МБ"]
+    for mt, size, name in stats[:limit]:
+        out.append(f"  {time.strftime('%Y-%m-%d %H:%M', time.localtime(mt))}  {size:>10}  {name}")
+    if len(stats) > limit:
+        out.append(f"  … ещё {len(stats) - limit}, самый старый "
+                   f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(stats[-1][0]))}")
+    return out
+
+
+def _tree_summary(root: Path, depth: int = 2, max_dirs: int = 60) -> list[str]:
+    """Подпапки до глубины depth: число файлов и дата свежайшего файла в каждой."""
+    out = []
+    seen = 0
+    for cur, dirs, files in os.walk(root):
+        rel = Path(cur).relative_to(root)
+        if len(rel.parts) >= depth:
+            dirs[:] = []
+        newest = 0.0
+        for name in files:
+            try:
+                newest = max(newest, (Path(cur) / name).stat().st_mtime)
+            except OSError:
+                pass
+        when = time.strftime('%Y-%m-%d %H:%M', time.localtime(newest)) if newest else "-"
+        out.append(f"  {str(rel) if rel.parts else '.':<60} файлов {len(files):>6}  свежайший {when}")
+        seen += 1
+        if seen >= max_dirs:
+            out.append("  … обрезано")
+            break
+    return out
+
+
+def _sitelist_inventory(cfg: dict, projects_dir: Path) -> str:
+    """Опись списков сайтов: настройки site list каждого .prj (всех, без фильтра
+    --only) и содержимое папок, на которые они ссылаются, плюс штатные site_list-*
+    GSA и папки подписок (Dropbox, C:\\Sitelists). Нужна, чтобы с шары видеть,
+    откуда проекты берут цели и когда списки обновлялись."""
+    out = [f"# опись списков сайтов, {time.strftime('%Y-%m-%d %H:%M')} по часам узла, "
+           f"проекты: {projects_dir}", "", "## настройки проектов",
+           "проект\tuse site list\ttype\tuser defined site list"]
+    folders: dict[str, set[str]] = {}
+    for prj in sorted(projects_dir.glob("*.prj")):
+        try:
+            raw = prj.read_bytes().decode("latin-1")
+        except OSError as e:
+            out.append(f"{prj.name}\t<не прочитан: {e}>")
+            continue
+        vals: dict[str, str] = {}
+        for line in raw.splitlines():
+            for k in _SITELIST_KEYS:
+                if line.startswith(k + "="):
+                    vals[k] = line[len(k) + 1:].strip()
+        out.append(f"{prj.name}\t{vals.get('use site list', '?')}\t{vals.get('use site list type', '?')}"
+                   f"\t{vals.get('user defined site list', '')}")
+        for part in vals.get("user defined site list", "").split("|"):
+            m = re.match(r"^(\d):(.+?);(\d+)$", part.strip())
+            if m:
+                tag = "on" if m.group(1) == "1" else "off"
+                folders.setdefault(m.group(2), set()).add(f"{prj.name}[{tag}]")
+    for name in ("site_list-identified", "site_list-success", "site_list-verify", "site_list-failed"):
+        folders.setdefault(str(projects_dir.parent / name), set()).add("<GSA>")
+    out += ["", "## папки списков из проектов и штатные GSA"]
+    for folder in sorted(folders):
+        d = Path(folder)
+        users = ", ".join(sorted(folders[folder]))
+        if not d.is_dir():
+            out.append(f"[{folder}] НЕТ ПАПКИ  ({users})")
+            continue
+        out.append(f"[{folder}]  ({users})")
+        out += _dir_listing(d)
+    out += ["", "## папки подписок и списков на узле"]
+    candidates = [Path.home() / "Dropbox", Path("C:/Dropbox"), Path("C:/Sitelists"),
+                  Path("C:/Users/Administrator/Dropbox"), Path("D:/Dropbox")]
+    for c in candidates:
+        if c.is_dir():
+            out.append(f"[{c}]")
+            out += _tree_summary(c)
+    return "\n".join(out) + "\n"
+
+
 def cmd_backup(cfg: dict, args) -> None:
-    """Снимок всех .prj (фильтр --only) в backup_dir — на всякий случай, с историей."""
-    if not cfg.get("backup_dir"):
-        sys.exit("Не задан backup_dir (куда складывать бэкапы проектов).")
+    """Снимок всех .prj (фильтр --only) в backup_dir — на всякий случай, с историей.
+    Рядом кладёт sitelists_inventory.txt — опись списков сайтов по всем .prj."""
+    if not _backup_root(cfg):
+        sys.exit("Не задан backup_dir и не выводится из success_share_dir (куда складывать бэкапы проектов).")
     target_dir = Path(args.dir or cfg.get("gsa_projects_dir", ""))
     if not target_dir.is_dir():
         sys.exit(f"Папка с .prj не найдена: {target_dir}")
@@ -1495,8 +1611,15 @@ def cmd_backup(cfg: dict, args) -> None:
     if not prj_files:
         print(f"В {target_dir} нет .prj (фильтр --only={args.only!r})")
         return
-    if not _snapshot_projects(cfg, prj_files, tag="manual"):
+    dest = _snapshot_projects(cfg, prj_files, tag="manual")
+    if not dest:
         sys.exit("Бэкап не удался.")
+    try:
+        inv = dest / "sitelists_inventory.txt"
+        inv.write_text(_sitelist_inventory(cfg, target_dir), encoding="utf-8")
+        print(f"✓ опись списков сайтов → {inv}")
+    except OSError as e:
+        print(f"⚠ опись списков не записана: {e}", file=sys.stderr)
 
 
 def cmd_emails(cfg: dict, args) -> None:
