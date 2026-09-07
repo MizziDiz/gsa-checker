@@ -1519,7 +1519,8 @@ def _dir_listing(d: Path, limit: int = 15) -> list[str]:
     total = sum(s[1] for s in stats)
     out = [f"  файлов {len(stats)}, {total / 1e6:.1f} МБ"]
     for mt, size, name in stats[:limit]:
-        out.append(f"  {time.strftime('%Y-%m-%d %H:%M', time.localtime(mt))}  {size:>10}  {name}")
+        out.append(f"  {time.strftime('%Y-%m-%d %H:%M', time.localtime(mt))}  {size:>10}  "
+                   f"{_count_lines(d / name):>7} строк  {name}")
     if len(stats) > limit:
         out.append(f"  … ещё {len(stats) - limit}, самый старый "
                    f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(stats[-1][0]))}")
@@ -1552,6 +1553,64 @@ def _tree_summary(root: Path, depth: int = 2, max_dirs: int = 60) -> list[str]:
     return out
 
 
+def _count_lines(f: Path, cap: int = 200 * 1024 * 1024) -> int:
+    """Число строк файла (до cap байт; больше — -1)."""
+    try:
+        if f.stat().st_size > cap:
+            return -1
+        n = 0
+        with open(f, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                n += chunk.count(b"\n")
+        return n
+    except OSError:
+        return -1
+
+
+_DATE_RE = re.compile(rb"(20\d\d-\d\d-\d\d) \d\d:\d\d")
+
+
+def _project_files_report(projects_dir: Path, detail_names: set[str], days: int = 60) -> list[str]:
+    """Рабочие файлы каждого проекта (размер, строки) и для избранных проектов —
+    раскладка по дням дат, встречающихся в строках .verify/.done/.success/.skip:
+    сколько проект подавал и подтверждал в день по его же файлам, без GSA."""
+    out = ["## рабочие файлы проектов (размер, строки)"]
+    exts = ("targets", "new_targets", "done", "verify", "success", "skip", "submitted", "failed")
+    since = time.strftime('%Y-%m-%d', time.localtime(time.time() - days * 86400))
+    histo: dict[str, dict[str, dict[str, int]]] = {}
+    for prj in sorted(projects_dir.glob("*.prj")):
+        stem = prj.name[:-4]
+        parts = []
+        for ext in exts:
+            f = projects_dir / f"{stem}.{ext}"
+            if f.is_file():
+                try:
+                    size = f.stat().st_size
+                except OSError:
+                    size = -1
+                parts.append(f"{ext}={size}/{_count_lines(f)}")
+                if stem in detail_names and ext in ("verify", "done", "success", "skip") and 0 <= size <= 50 * 1024 * 1024:
+                    try:
+                        data = f.read_bytes()
+                    except OSError:
+                        continue
+                    per = histo.setdefault(stem, {}).setdefault(ext, {})
+                    for line in data.split(b"\n"):
+                        m = _DATE_RE.search(line)
+                        if m:
+                            d = m.group(1).decode()
+                            if d >= since:
+                                per[d] = per.get(d, 0) + 1
+        out.append(f"{stem}\t" + "  ".join(parts))
+    out.append("")
+    out.append(f"## по дням с {since}: даты в строках рабочих файлов избранных проектов (файл: день=строк)")
+    for stem, per_ext in histo.items():
+        for ext, per in per_ext.items():
+            if per:
+                out.append(f"{stem}.{ext}\t" + " ".join(f"{d[5:]}={n}" for d, n in sorted(per.items())))
+    return out
+
+
 def _sitelist_inventory(cfg: dict, projects_dir: Path) -> str:
     """Опись списков сайтов: настройки site list каждого .prj (всех, без фильтра
     --only) и содержимое папок, на которые они ссылаются, плюс штатные site_list-*
@@ -1581,6 +1640,9 @@ def _sitelist_inventory(cfg: dict, projects_dir: Path) -> str:
                 folders.setdefault(m.group(2), set()).add(f"{prj.name}[{tag}]")
     for name in ("site_list-identified", "site_list-success", "site_list-verify", "site_list-failed"):
         folders.setdefault(str(projects_dir.parent / name), set()).add("<GSA>")
+    detail = {ln.split("\t")[0][:-4] for ln in out[4:]
+              if ln.count("\t") >= 2 and (ln.split("\t")[1] == "1" or not ln.startswith("Split"))}
+    out += [""] + _project_files_report(projects_dir, detail)
     out += ["", "## папки списков из проектов и штатные GSA"]
     for folder in sorted(folders):
         d = Path(folder)
