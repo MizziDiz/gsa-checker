@@ -1535,13 +1535,16 @@ def _tree_summary(root: Path, depth: int = 2, max_dirs: int = 60) -> list[str]:
         if len(rel.parts) >= depth:
             dirs[:] = []
         newest = 0.0
+        total = 0
         for name in files:
             try:
-                newest = max(newest, (Path(cur) / name).stat().st_mtime)
+                st = (Path(cur) / name).stat()
             except OSError:
-                pass
+                continue
+            newest = max(newest, st.st_mtime)
+            total += st.st_size
         when = time.strftime('%Y-%m-%d %H:%M', time.localtime(newest)) if newest else "-"
-        out.append(f"  {str(rel) if rel.parts else '.':<60} файлов {len(files):>6}  свежайший {when}")
+        out.append(f"  {str(rel) if rel.parts else '.':<60} файлов {len(files):>6}  {total / 1e6:>8.1f} МБ  свежайший {when}")
         seen += 1
         if seen >= max_dirs:
             out.append("  … обрезано")
@@ -1590,10 +1593,29 @@ def _sitelist_inventory(cfg: dict, projects_dir: Path) -> str:
     out += ["", "## папки подписок и списков на узле"]
     candidates = [Path.home() / "Dropbox", Path("C:/Dropbox"), Path("C:/Sitelists"),
                   Path("C:/Users/Administrator/Dropbox"), Path("D:/Dropbox")]
+    roots: list[Path] = []
     for c in candidates:
-        if c.is_dir():
-            out.append(f"[{c}]")
-            out += _tree_summary(c)
+        if c.is_dir() and not any(c.resolve() == r.resolve() for r in roots):
+            roots.append(c)
+    for c in roots:
+        out.append(f"[{c}]")
+        out += _tree_summary(c)
+    # Полный листинг каждой папки списков подписок (глубина 2, включая конфликтные
+    # копии Dropbox) — по датам и размерам видно, сколько и когда приходило.
+    out += ["", "## файлы в папках подписок (свежайшие 8 в каждой)"]
+    for c in roots:
+        try:
+            level1 = sorted(d for d in c.iterdir() if d.is_dir() and not d.name.startswith("."))
+        except OSError:
+            continue
+        for d1 in level1:
+            try:
+                level2 = sorted(d for d in d1.iterdir() if d.is_dir())
+            except OSError:
+                continue
+            for d2 in level2:
+                out.append(f"[{d2}]")
+                out += _dir_listing(d2, limit=8)
     return "\n".join(out) + "\n"
 
 
