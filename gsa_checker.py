@@ -1575,7 +1575,7 @@ def _project_files_report(projects_dir: Path, detail_names: set[str], days: int 
     раскладка по дням дат, встречающихся в строках .verify/.done/.success/.skip:
     сколько проект подавал и подтверждал в день по его же файлам, без GSA."""
     out = ["## рабочие файлы проектов (размер, строки)"]
-    exts = ("targets", "new_targets", "done", "verify", "success", "skip", "submitted", "failed")
+    exts = ("targets", "new_targets", "urls_done", "hosts_done", "done", "verify", "success", "skip", "submitted", "failed")
     since = time.strftime('%Y-%m-%d', time.localtime(time.time() - days * 86400))
     histo: dict[str, dict[str, dict[str, int]]] = {}
     for prj in sorted(projects_dir.glob("*.prj")):
@@ -1620,7 +1620,7 @@ def _list_host(u: str) -> str:
     return h[4:] if h.startswith("www.") else h
 
 
-def _list_supply_report(projects_dir: Path, prj_lists: dict[str, list[str]]) -> list[str]:
+def _list_supply_report(projects_dir: Path, prj_lists: dict[str, list[str]], out_dir: Path) -> list[str]:
     """Поставка списков по движкам для проектов с включёнными списками: на каждый
     файл списка — строк, хостов, сколько хостов уже есть в .success проекта и
     включён ли движок в проекте. Показывает, есть ли проекту что брать."""
@@ -1646,8 +1646,24 @@ def _list_supply_report(projects_dir: Path, prj_lists: dict[str, list[str]]) -> 
                         succ_hosts.add(h)
             except OSError:
                 pass
+        # история попыток: .urls_done — всё, что проект уже брал в работу (успех или отказ)
+        done_hosts: set[str] = set()
+        done_lines = 0
+        df = projects_dir / f"{stem}.urls_done"
+        if df.is_file():
+            try:
+                for line in df.read_bytes().split(b"\n"):
+                    if not line.strip():
+                        continue
+                    done_lines += 1
+                    h = _list_host(line.split(b"\xff")[0].decode("latin-1", "replace"))
+                    if h:
+                        done_hosts.add(h)
+            except OSError:
+                pass
         on_engines = sum(1 for v in flags.values() if v == "1")
-        out.append(f"[{stem}] движков включено {on_engines}, хостов в .success {len(succ_hosts)}")
+        out.append(f"[{stem}] движков включено {on_engines}, хостов в .success {len(succ_hosts)}, "
+                   f"строк в .urls_done {done_lines}, хостов в .urls_done {len(done_hosts)}")
         for folder in prj_lists[stem]:
             d = Path(folder)
             if not d.is_dir():
@@ -1655,6 +1671,7 @@ def _list_supply_report(projects_dir: Path, prj_lists: dict[str, list[str]]) -> 
                 continue
             files = sorted(d.glob("sitelist_*.txt"))
             skipped_off = 0
+            folder_hosts: set[str] = set()
             out.append(f"  {folder}  (файлов {len(files)})")
             for f in files:
                 eng = f.stem[len("sitelist_"):].split("-", 1)[-1]
@@ -1677,13 +1694,25 @@ def _list_supply_report(projects_dir: Path, prj_lists: dict[str, list[str]]) -> 
                             hosts.add(h)
                 except OSError:
                     continue
+                folder_hosts |= hosts
                 if n:
-                    out.append(f"    {f.name}: строк {n}, хостов {len(hosts)}, уже в .success {len(hosts & succ_hosts)}")
+                    out.append(f"    {f.name}: строк {n}, хостов {len(hosts)}, уже в .success {len(hosts & succ_hosts)}, "
+                               f"уже пробовались (.urls_done) {len(hosts & done_hosts)}")
             out.append(f"    … файлов движков, выключенных в проекте или неизвестных: {skipped_off}")
+            out.append(f"    ИТОГО по папке (включённые движки): хостов {len(folder_hosts)}, "
+                       f"из них в .success {len(folder_hosts & succ_hosts)}, уже пробовались {len(folder_hosts & done_hosts)}, "
+                       f"ещё не пробовались {len(folder_hosts - done_hosts)}")
+            # множество хостов папки — рядом со снимком, для суточных сравнений «сколько хостов появилось впервые»
+            try:
+                slug = re.sub(r"[^A-Za-z0-9]+", "_", d.name).strip("_")[:60]
+                (out_dir / f"hosts_{stem[:20].replace(' ', '_')}_{slug}.txt").write_text(
+                    "\n".join(sorted(folder_hosts)) + "\n", encoding="utf-8")
+            except OSError:
+                pass
     return out
 
 
-def _sitelist_inventory(cfg: dict, projects_dir: Path) -> str:
+def _sitelist_inventory(cfg: dict, projects_dir: Path, out_dir: Path | None = None) -> str:
     """Опись списков сайтов: настройки site list каждого .prj (всех, без фильтра
     --only) и содержимое папок, на которые они ссылаются, плюс штатные site_list-*
     GSA и папки подписок (Dropbox, C:\\Sitelists). Нужна, чтобы с шары видеть,
@@ -1718,7 +1747,7 @@ def _sitelist_inventory(cfg: dict, projects_dir: Path) -> str:
     detail = {ln.split("\t")[0][:-4] for ln in out[4:]
               if ln.count("\t") >= 2 and (ln.split("\t")[1] == "1" or not ln.startswith("Split"))}
     out += [""] + _project_files_report(projects_dir, detail)
-    out += [""] + _list_supply_report(projects_dir, prj_lists)
+    out += [""] + _list_supply_report(projects_dir, prj_lists, out_dir or projects_dir)
     out += ["", "## папки списков из проектов и штатные GSA"]
     for folder in sorted(folders):
         d = Path(folder)
@@ -1776,7 +1805,7 @@ def cmd_backup(cfg: dict, args) -> None:
         sys.exit("Бэкап не удался.")
     try:
         inv = dest / "sitelists_inventory.txt"
-        inv.write_text(_sitelist_inventory(cfg, target_dir), encoding="utf-8")
+        inv.write_text(_sitelist_inventory(cfg, target_dir, dest), encoding="utf-8")
         print(f"✓ опись списков сайтов → {inv}")
     except OSError as e:
         print(f"⚠ опись списков не записана: {e}", file=sys.stderr)
