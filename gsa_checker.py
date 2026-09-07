@@ -1611,6 +1611,78 @@ def _project_files_report(projects_dir: Path, detail_names: set[str], days: int 
     return out
 
 
+def _list_host(u: str) -> str:
+    from urllib.parse import urlsplit
+    try:
+        h = urlsplit(u.strip()).hostname or ""
+    except ValueError:
+        return ""
+    return h[4:] if h.startswith("www.") else h
+
+
+def _list_supply_report(projects_dir: Path, prj_lists: dict[str, list[str]]) -> list[str]:
+    """Поставка списков по движкам для проектов с включёнными списками: на каждый
+    файл списка — строк, хостов, сколько хостов уже есть в .success проекта и
+    включён ли движок в проекте. Показывает, есть ли проекту что брать."""
+    out = ["## поставка списков по движкам (только включённые в проекте движки; файл: строк / хостов / хостов уже в .success)"]
+    for stem in sorted(prj_lists):
+        prj = projects_dir / f"{stem}.prj"
+        try:
+            raw = prj.read_bytes().decode("latin-1")
+        except OSError:
+            continue
+        flags: dict[str, str] = {}
+        for line in raw.splitlines():
+            if line.endswith("=1") or line.endswith("=0"):
+                k, v = line.rsplit("=", 1)
+                flags[k] = v
+        succ_hosts: set[str] = set()
+        sf = projects_dir / f"{stem}.success"
+        if sf.is_file():
+            try:
+                for line in sf.read_bytes().split(b"\n"):
+                    h = _list_host(line.split(b"\xff")[0].decode("latin-1", "replace"))
+                    if h:
+                        succ_hosts.add(h)
+            except OSError:
+                pass
+        on_engines = sum(1 for v in flags.values() if v == "1")
+        out.append(f"[{stem}] движков включено {on_engines}, хостов в .success {len(succ_hosts)}")
+        for folder in prj_lists[stem]:
+            d = Path(folder)
+            if not d.is_dir():
+                out.append(f"  {folder}: НЕТ ПАПКИ")
+                continue
+            files = sorted(d.glob("sitelist_*.txt"))
+            skipped_off = 0
+            out.append(f"  {folder}  (файлов {len(files)})")
+            for f in files:
+                eng = f.stem[len("sitelist_"):].split("-", 1)[-1]
+                on = flags.get(eng, "?")
+                if on != "1":
+                    skipped_off += 1
+                    continue
+                try:
+                    if f.stat().st_size > 30 * 1024 * 1024:
+                        out.append(f"    {f.name}: больше 30 МБ, пропущен")
+                        continue
+                    hosts: set[str] = set()
+                    n = 0
+                    for line in f.read_bytes().split(b"\n"):
+                        if not line.strip():
+                            continue
+                        n += 1
+                        h = _list_host(line.decode("latin-1", "replace"))
+                        if h:
+                            hosts.add(h)
+                except OSError:
+                    continue
+                if n:
+                    out.append(f"    {f.name}: строк {n}, хостов {len(hosts)}, уже в .success {len(hosts & succ_hosts)}")
+            out.append(f"    … файлов движков, выключенных в проекте или неизвестных: {skipped_off}")
+    return out
+
+
 def _sitelist_inventory(cfg: dict, projects_dir: Path) -> str:
     """Опись списков сайтов: настройки site list каждого .prj (всех, без фильтра
     --only) и содержимое папок, на которые они ссылаются, плюс штатные site_list-*
@@ -1620,6 +1692,7 @@ def _sitelist_inventory(cfg: dict, projects_dir: Path) -> str:
            f"проекты: {projects_dir}", "", "## настройки проектов",
            "проект\tuse site list\ttype\tuser defined site list"]
     folders: dict[str, set[str]] = {}
+    prj_lists: dict[str, list[str]] = {}
     for prj in sorted(projects_dir.glob("*.prj")):
         try:
             raw = prj.read_bytes().decode("latin-1")
@@ -1638,11 +1711,14 @@ def _sitelist_inventory(cfg: dict, projects_dir: Path) -> str:
             if m:
                 tag = "on" if m.group(1) == "1" else "off"
                 folders.setdefault(m.group(2), set()).add(f"{prj.name}[{tag}]")
+                if vals.get("use site list") == "1" and m.group(1) == "1":
+                    prj_lists.setdefault(prj.name[:-4], []).append(m.group(2))
     for name in ("site_list-identified", "site_list-success", "site_list-verify", "site_list-failed"):
         folders.setdefault(str(projects_dir.parent / name), set()).add("<GSA>")
     detail = {ln.split("\t")[0][:-4] for ln in out[4:]
               if ln.count("\t") >= 2 and (ln.split("\t")[1] == "1" or not ln.startswith("Split"))}
     out += [""] + _project_files_report(projects_dir, detail)
+    out += [""] + _list_supply_report(projects_dir, prj_lists)
     out += ["", "## папки списков из проектов и штатные GSA"]
     for folder in sorted(folders):
         d = Path(folder)
