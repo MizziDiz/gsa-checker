@@ -1649,21 +1649,32 @@ def _list_supply_report(projects_dir: Path, prj_lists: dict[str, list[str]], out
         # история попыток: .urls_done — всё, что проект уже брал в работу (успех или отказ)
         done_hosts: set[str] = set()
         done_lines = 0
-        df = projects_dir / f"{stem}.urls_done"
-        if df.is_file():
+        samples: list[str] = []
+        # .urls_done — история URL; .hosts_done — история хостов (одна запись на строку,
+        # формат GSA не документирован: берём и разделитель 0xFF, и пробел/таб, и голую строку)
+        for ext in ("urls_done", "hosts_done"):
+            df = projects_dir / f"{stem}.{ext}"
+            if not df.is_file():
+                continue
             try:
-                for line in df.read_bytes().split(b"\n"):
-                    if not line.strip():
-                        continue
-                    done_lines += 1
-                    h = _list_host(line.split(b"\xff")[0].decode("latin-1", "replace"))
-                    if h:
-                        done_hosts.add(h)
+                data = df.read_bytes()
             except OSError:
-                pass
+                continue
+            for line in data.split(b"\n"):
+                s = line.strip()
+                if not s:
+                    continue
+                done_lines += 1
+                first = s.split(b"\xff")[0].split(b"\t")[0].split(b" ")[0].decode("latin-1", "replace")
+                if len(samples) < 2:
+                    samples.append(f"{ext}: {first[:100]}")
+                h = _list_host(first) if "://" in first else first.lower().lstrip("www.").strip("/")
+                if h and "." in h:
+                    done_hosts.add(h)
         on_engines = sum(1 for v in flags.values() if v == "1")
         out.append(f"[{stem}] движков включено {on_engines}, хостов в .success {len(succ_hosts)}, "
-                   f"строк в .urls_done {done_lines}, хостов в .urls_done {len(done_hosts)}")
+                   f"строк истории (.urls_done + .hosts_done) {done_lines}, хостов в истории {len(done_hosts)}; "
+                   f"образцы: {' | '.join(samples)}")
         for folder in prj_lists[stem]:
             d = Path(folder)
             if not d.is_dir():
