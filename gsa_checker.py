@@ -1859,6 +1859,23 @@ def cmd_backup(cfg: dict, args) -> None:
         print(f"✓ опись списков сайтов → {inv}")
     except OSError as e:
         print(f"⚠ опись списков не записана: {e}", file=sys.stderr)
+    # История попыток проектов не-Split (.hosts_done/.urls_done — хэши, без URL и секретов):
+    # копируем в снимок, чтобы функцию хэша можно было подобрать на сервере, а не на узле.
+    import shutil
+    copied = 0
+    for prj in sorted(target_dir.glob("*.prj")):
+        if prj.name.startswith("Split"):
+            continue
+        for ext in ("hosts_done", "urls_done"):
+            f = target_dir / f"{prj.name[:-4]}.{ext}"
+            if f.is_file() and f.stat().st_size <= 20 * 1024 * 1024:
+                try:
+                    shutil.copy2(f, dest / f.name)
+                    copied += 1
+                except OSError:
+                    pass
+    if copied:
+        print(f"✓ файлов истории попыток скопировано: {copied}")
 
 
 def cmd_emails(cfg: dict, args) -> None:
