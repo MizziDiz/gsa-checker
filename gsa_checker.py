@@ -1836,9 +1836,129 @@ def _sitelist_inventory(cfg: dict, projects_dir: Path, out_dir: Path | None = No
     return "\n".join(out) + "\n"
 
 
+_LOG_KEYS = (
+    ("submitted", "submitted"), ("verified", "verified"), ("registr", "registration"),
+    ("verification", "verification"), ("captcha", "captcha"), ("sitekey", "sitekey"),
+    ("already parsed", "already parsed"), ("no engine", "no engine matches"),
+    ("download failed", "download failed"), ("proxy", "proxy"), ("pop3", "pop3"),
+    ("e-mail", "e-mail"), ("error", "error"),
+)
+_LOG_DATE_RES = (
+    re.compile(rb"(20\d\d)-(\d\d)-(\d\d)"),
+    re.compile(rb"(\d\d)\.(\d\d)\.(20\d\d)"),
+    re.compile(rb"\b(\d{1,2})/(\d{1,2})/(20\d\d)"),
+)
+_LOG_PROJ_RE = re.compile(rb"\[([^\]\r\n]{2,48})\]")
+
+
+def _log_candidates(cfg: dict) -> list[Path]:
+    """Где искать тяжёлые логи GSA/XEvil на узле: корень GSA (рядом с projects),
+    рабочий стол/документы/загрузки администратора, типовые папки."""
+    roots: list[Path] = []
+    proj = Path(cfg.get("gsa_projects_dir", ""))
+    if proj.is_dir():
+        roots.append(proj.parent)
+    home = Path.home()
+    for extra in (home / "Desktop", home / "Documents", home / "Downloads", Path("C:/A-GSA"),
+                  Path("C:/GSA"), Path("C:/logs"), Path("C:/XEvil"), Path("C:/Users/Administrator/Desktop"),
+                  Path("C:/Users/Administrator/Documents"), Path("C:/Users/Administrator/Downloads")):
+        if extra.is_dir() and not any(extra.resolve() == r.resolve() for r in roots):
+            roots.append(extra)
+    found: list[Path] = []
+    now = time.time()
+    for root in roots:
+        for depth_root, dirs, files in os.walk(root):
+            rel = Path(depth_root).relative_to(root)
+            if len(rel.parts) >= 2:
+                dirs[:] = []
+            if any(part.lower() in ("debug", "projects", "site_list-identified", "site_list-success",
+                                    "site_list-verify", "site_list-failed", "dropbox", ".git") for part in rel.parts):
+                dirs[:] = []
+                continue
+            for name in files:
+                low = name.lower()
+                if not low.endswith((".log", ".txt", ".csv")) or low.startswith("sitelist_"):
+                    continue
+                f = Path(depth_root) / name
+                try:
+                    st = f.stat()
+                except OSError:
+                    continue
+                if st.st_size >= 1024 * 1024 and now - st.st_mtime <= 14 * 86400:
+                    found.append(f)
+    found.sort(key=lambda f: -f.stat().st_size)
+    return found[:12]
+
+
+def _log_extract(cfg: dict, dest: Path) -> list[str]:
+    """Сводка по тяжёлым логам без копирования их целиком: по каждому файлу — размер,
+    даты, образцы строк, счётчики строк по дням и ключевым словам, суточные
+    submitted/verified по проектам (первый [..] в строке); рядом — хвост 3 МБ."""
+    out = [f"# сводка логов узла, {time.strftime('%Y-%m-%d %H:%M')} по часам узла"]
+    files = _log_candidates(cfg)
+    if not files:
+        out.append("подходящих файлов не найдено (.log/.txt/.csv от 1 МБ, моложе 14 дней, вне debug/projects/Dropbox)")
+        return out
+    for f in files:
+        st = f.stat()
+        out += ["", f"## {f}", f"размер {st.st_size / 1e6:.1f} МБ, изменён {time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime))}"]
+        per_day: dict[str, dict[str, int]] = {}
+        per_day_proj: dict[str, dict[str, dict[str, int]]] = {}
+        samples: list[str] = []
+        lines = 0
+        try:
+            with open(f, "rb") as fh:
+                for raw in fh:
+                    lines += 1
+                    if len(samples) < 3 and raw.strip():
+                        samples.append(raw.decode("utf-8", "replace").strip()[:160])
+                    day = "?"
+                    for rx in _LOG_DATE_RES:
+                        m = rx.search(raw[:40])
+                        if m:
+                            g = m.groups()
+                            day = f"{g[0]}-{g[1]}-{g[2]}" if len(g[0]) == 4 else f"{g[2]}-{g[1].zfill(2)}-{g[0].zfill(2)}"
+                            break
+                    low = raw.lower()
+                    d = per_day.setdefault(day, {})
+                    d["строк"] = d.get("строк", 0) + 1
+                    for needle, label in _LOG_KEYS:
+                        if needle.encode() in low:
+                            d[label] = d.get(label, 0) + 1
+                            if label in ("submitted", "verified"):
+                                pm = _LOG_PROJ_RE.search(raw)
+                                proj = pm.group(1).decode("utf-8", "replace") if pm else "?"
+                                per_day_proj.setdefault(day, {}).setdefault(proj, {})
+                                per_day_proj[day][proj][label] = per_day_proj[day][proj].get(label, 0) + 1
+        except OSError as e:
+            out.append(f"не прочитан: {e}")
+            continue
+        out.append(f"строк {lines}")
+        out.append("образцы: " + " | ".join(samples))
+        out.append("по дням (строк; ключевые слова):")
+        for day in sorted(per_day)[-45:]:
+            d = per_day[day]
+            out.append(f"  {day}: " + ", ".join(f"{k}={v}" for k, v in sorted(d.items(), key=lambda kv: -kv[1])[:14]))
+        out.append("по дням и проектам, submitted/verified (верх 25 проектов за день):")
+        for day in sorted(per_day_proj)[-45:]:
+            rows = sorted(per_day_proj[day].items(), key=lambda kv: -(kv[1].get("submitted", 0) + kv[1].get("verified", 0)))[:25]
+            out.append(f"  {day}: " + "; ".join(f"{pr}: s={v.get('submitted', 0)} v={v.get('verified', 0)}" for pr, v in rows))
+        # хвост 3 МБ рядом со снимком
+        try:
+            tail_name = "logtail_" + re.sub(r"[^A-Za-z0-9._-]+", "_", f.name)[:80]
+            with open(f, "rb") as fh:
+                fh.seek(max(0, st.st_size - 3 * 1024 * 1024))
+                (dest / tail_name).write_bytes(fh.read())
+            out.append(f"хвост 3 МБ → {tail_name}")
+        except OSError as e:
+            out.append(f"хвост не скопирован: {e}")
+    return out
+
+
 def cmd_backup(cfg: dict, args) -> None:
     """Снимок всех .prj (фильтр --only) в backup_dir — на всякий случай, с историей.
-    Рядом кладёт sitelists_inventory.txt — опись списков сайтов по всем .prj."""
+    Рядом кладёт sitelists_inventory.txt — опись списков сайтов по всем .prj,
+    и gsa_log_summary.txt — сводку по тяжёлым логам узла с хвостами."""
     if not _backup_root(cfg):
         sys.exit("Не задан backup_dir и не выводится из success_share_dir (куда складывать бэкапы проектов).")
     target_dir = Path(args.dir or cfg.get("gsa_projects_dir", ""))
@@ -1876,6 +1996,12 @@ def cmd_backup(cfg: dict, args) -> None:
                     pass
     if copied:
         print(f"✓ файлов истории попыток скопировано: {copied}")
+    try:
+        summ = dest / "gsa_log_summary.txt"
+        summ.write_text("\n".join(_log_extract(cfg, dest)) + "\n", encoding="utf-8")
+        print(f"✓ сводка логов → {summ}")
+    except OSError as e:
+        print(f"⚠ сводка логов не записана: {e}", file=sys.stderr)
 
 
 def cmd_emails(cfg: dict, args) -> None:
