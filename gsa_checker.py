@@ -1916,7 +1916,7 @@ def _log_extract(cfg: dict, dest: Path) -> list[str]:
                     for rx in _LOG_DATE_RES:
                         m = rx.search(raw[:40])
                         if m:
-                            g = m.groups()
+                            g = [x.decode() for x in m.groups()]
                             day = f"{g[0]}-{g[1]}-{g[2]}" if len(g[0]) == 4 else f"{g[2]}-{g[1].zfill(2)}-{g[0].zfill(2)}"
                             break
                     low = raw.lower()
