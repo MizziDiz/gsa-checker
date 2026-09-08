@@ -1647,34 +1647,71 @@ def _list_supply_report(projects_dir: Path, prj_lists: dict[str, list[str]], out
             except OSError:
                 pass
         # история попыток: .urls_done — всё, что проект уже брал в работу (успех или отказ)
-        done_hosts: set[str] = set()
+        # История попыток GSA: .hosts_done и .urls_done хранят не строки, а 32-битные хэши
+        # вида HHHHHHHH:N. Функцию хэша подбираем по хостам из .success (они точно пробовались):
+        # кандидаты — crc32 / adler32 от хоста в нескольких написаниях.
+        done_hashes: set[int] = set()
         done_lines = 0
         samples: list[str] = []
-        # .urls_done — история URL; .hosts_done — история хостов (одна запись на строку,
-        # формат GSA не документирован: берём и разделитель 0xFF, и пробел/таб, и голую строку)
-        for ext in ("urls_done", "hosts_done"):
-            df = projects_dir / f"{stem}.{ext}"
-            if not df.is_file():
-                continue
+        hf = projects_dir / f"{stem}.hosts_done"
+        if hf.is_file():
             try:
-                data = df.read_bytes()
+                for line in hf.read_bytes().split(b"\n"):
+                    s = line.strip()
+                    if not s:
+                        continue
+                    done_lines += 1
+                    tok = s.split(b":")[0].decode("latin-1", "replace")
+                    if len(samples) < 2:
+                        samples.append(s.decode("latin-1", "replace")[:40])
+                    try:
+                        done_hashes.add(int(tok, 16))
+                    except ValueError:
+                        pass
             except OSError:
-                continue
-            for line in data.split(b"\n"):
-                s = line.strip()
-                if not s:
-                    continue
-                done_lines += 1
-                first = s.split(b"\xff")[0].split(b"\t")[0].split(b" ")[0].decode("latin-1", "replace")
-                if len(samples) < 2:
-                    samples.append(f"{ext}: {first[:100]}")
-                h = _list_host(first) if "://" in first else first.lower().lstrip("www.").strip("/")
-                if h and "." in h:
-                    done_hosts.add(h)
+                pass
+        import zlib
+        succ_raw: list[str] = []
+        if sf.is_file():
+            try:
+                for line in sf.read_bytes().split(b"\n")[:3000]:
+                    u = line.split(b"\xff")[0].decode("latin-1", "replace").strip()
+                    if "://" in u:
+                        from urllib.parse import urlsplit
+                        try:
+                            hn = urlsplit(u).hostname or ""
+                        except ValueError:
+                            hn = ""
+                        if hn:
+                            succ_raw.append(hn)
+            except OSError:
+                pass
+        cands = {
+            "crc32(host)": lambda h: zlib.crc32(h.encode("latin-1", "replace")) & 0xFFFFFFFF,
+            "crc32(host без www)": lambda h: zlib.crc32((h[4:] if h.startswith("www.") else h).encode("latin-1", "replace")) & 0xFFFFFFFF,
+            "crc32(HOST верхним)": lambda h: zlib.crc32(h.upper().encode("latin-1", "replace")) & 0xFFFFFFFF,
+            "crc32(www.host)": lambda h: zlib.crc32(("www." + h if not h.startswith("www.") else h).encode("latin-1", "replace")) & 0xFFFFFFFF,
+            "adler32(host)": lambda h: zlib.adler32(h.encode("latin-1", "replace")) & 0xFFFFFFFF,
+            "adler32(host без www)": lambda h: zlib.adler32((h[4:] if h.startswith("www.") else h).encode("latin-1", "replace")) & 0xFFFFFFFF,
+        }
+        best_name, best_rate, best_fn = "", 0.0, None
+        probe = succ_raw[:2000]
+        if done_hashes and probe:
+            for name, fn in cands.items():
+                rate = sum(fn(h) in done_hashes for h in probe) / len(probe)
+                if rate > best_rate:
+                    best_name, best_rate, best_fn = name, rate, fn
         on_engines = sum(1 for v in flags.values() if v == "1")
         out.append(f"[{stem}] движков включено {on_engines}, хостов в .success {len(succ_hosts)}, "
-                   f"строк истории (.urls_done + .hosts_done) {done_lines}, хостов в истории {len(done_hosts)}; "
-                   f"образцы: {' | '.join(samples)}")
+                   f"записей в .hosts_done {done_lines} (образцы: {' | '.join(samples)}); "
+                   f"подбор хэша по {len(probe)} хостам .success: лучший «{best_name}» совпадает на {best_rate:.0%}"
+                   + ("" if best_rate >= 0.5 else " — функция не подобрана, покрытие не считается"))
+        host_hash = best_fn if best_rate >= 0.5 else None
+        def tried(h: str) -> bool:
+            if host_hash is None:
+                return False
+            return host_hash(h) in done_hashes or host_hash("www." + h) in done_hashes
+        done_hosts: set[str] = set()   # совместимость с кодом ниже: считаем через tried()
         for folder in prj_lists[stem]:
             d = Path(folder)
             if not d.is_dir():
@@ -1707,12 +1744,14 @@ def _list_supply_report(projects_dir: Path, prj_lists: dict[str, list[str]], out
                     continue
                 folder_hosts |= hosts
                 if n:
+                    tr = sum(tried(h) for h in hosts)
                     out.append(f"    {f.name}: строк {n}, хостов {len(hosts)}, уже в .success {len(hosts & succ_hosts)}, "
-                               f"уже пробовались (.urls_done) {len(hosts & done_hosts)}")
+                               f"уже пробовались (.hosts_done) {tr}")
             out.append(f"    … файлов движков, выключенных в проекте или неизвестных: {skipped_off}")
+            tr_all = sum(tried(h) for h in folder_hosts)
             out.append(f"    ИТОГО по папке (включённые движки): хостов {len(folder_hosts)}, "
-                       f"из них в .success {len(folder_hosts & succ_hosts)}, уже пробовались {len(folder_hosts & done_hosts)}, "
-                       f"ещё не пробовались {len(folder_hosts - done_hosts)}")
+                       f"из них в .success {len(folder_hosts & succ_hosts)}, уже пробовались {tr_all}, "
+                       f"ещё не пробовались {len(folder_hosts) - tr_all}")
             # множество хостов папки — рядом со снимком, для суточных сравнений «сколько хостов появилось впервые»
             try:
                 slug = re.sub(r"[^A-Za-z0-9]+", "_", d.name).strip("_")[:60]
