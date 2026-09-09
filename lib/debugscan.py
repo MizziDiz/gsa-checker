@@ -267,7 +267,7 @@ def login_wall(head: str) -> str:
 
 
 def scan(directory: Path, head_bytes: int = HEAD_BYTES,
-         mail_domain: str | None = None, deep_bytes: int = 1_048_576) -> dict:
+         mail_domain: str | None = None, deep_bytes: int = 262_144, deep_limit: int = 20_000) -> dict:
     """Полный проход по всем файлам папки. Возвращает словарь статистики.
 
     mail_domain — домен catch-all (напр. graniteloom.com): если он встретился в
@@ -303,6 +303,7 @@ def scan(directory: Path, head_bytes: int = HEAD_BYTES,
     sitekey_values: Counter = Counter()
     sitekey_cases: list[dict] = []
     deep_found = 0
+    deep_tries = 0
     macro_raw: Counter = Counter()
     host_signs: dict[str, Counter] = {}
     digests: Counter = Counter()
@@ -357,8 +358,12 @@ def scan(directory: Path, head_bytes: int = HEAD_BYTES,
         if "recaptcha" in head or "sitekey" in head:
             pages_with_recaptcha += 1
             keys = sitekeys(text)   # ключ регистрозависим — берём исходный текст
-            if not keys and st.st_size > len(raw):
-                # ключ может лежать ниже прочитанной «головы» — дочитываем файл
+            if not keys and st.st_size > len(raw) and deep_tries < deep_limit:
+                # ключ может лежать ниже прочитанной «головы» — дочитываем файл.
+                # Дочитывание ограничено (deep_bytes на файл, deep_limit файлов):
+                # на gsa-03 полное чтение 41 тыс. страниц по 1 МБ растянуло скан
+                # 411 тыс. дампов на 18 часов (08.09.2026).
+                deep_tries += 1
                 try:
                     with p.open("rb") as f:
                         full = f.read(deep_bytes).decode("utf-8", "replace")
@@ -444,6 +449,7 @@ def scan(directory: Path, head_bytes: int = HEAD_BYTES,
         "login_wall": walls.most_common(),
         "recaptcha_pages": pages_with_recaptcha,
         "sitekey_found_deep": deep_found,
+        "sitekey_deep_tries": deep_tries,
         "sitekey_kinds": sitekey_kinds.most_common(),
         "sitekey_unique": len(sitekey_values),
         "sitekey_top": sitekey_values.most_common(15),
