@@ -1107,6 +1107,17 @@ def cmd_create(cfg: dict, args) -> None:
         if not src.exists():
             sys.exit(f"Источник целей не найден: {src}")
         targets = _read_targets(src, int(args.limit or 0))
+        pct = float(getattr(args, "sample_percent", 0) or 0)
+        if targets and 0 < pct < 100:
+            # Случайная доля базы на КАЖДЫЙ проект (15.09.2026, решение оператора):
+            # проекты одной страны получают разные подмножества одной базы, а не
+            # одну и ту же базу целиком. Свой генератор на проект, без общего seed —
+            # иначе два проекта на один бакет вытянут одинаковую выборку.
+            import random
+            n_full = len(targets)
+            k = max(1, int(round(n_full * pct / 100.0)))
+            targets = random.SystemRandom().sample(targets, k)
+            changed.append(f"выборка {pct:g}% базы: {k:,} из {n_full:,}")
 
     n_art = 0 if getattr(args, "no_articles", False) else int(
         getattr(args, "articles", 0) or cfg.get("articles_count", 20) or 20)
@@ -2561,6 +2572,8 @@ def main() -> None:
     ap.add_argument("--template", help="путь к template.prj (--create)")
     ap.add_argument("--out", help="папка вывода (--create)")
     ap.add_argument("--limit", type=int, default=0, help="макс. целей (--create)")
+    ap.add_argument("--sample-percent", type=float, default=0,
+                    help="случайная доля целей из источника, %% (--create; 0 = все)")
     ap.add_argument("--force", action="store_true", help="перезаписать (--create)")
     ap.add_argument("--anchor", action="append",
                     help="анкор (повторяемый; --create; в Anchor_Text, GSA крутит ≈ поровну)")
