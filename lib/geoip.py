@@ -95,7 +95,9 @@ def country_iso(host: str, db_path: str, cache: dict, timeout: float = 3.0) -> s
         socket.setdefaulttimeout(timeout)
         ip = socket.gethostbyname(host)      # OSError (gaierror/timeout) — если DNS не резолвит
     except OSError:
-        cache[host] = ""
+        # Сбой резолвера — это «не смогли узнать», а не «записи нет». Раньше он
+        # сохранялся в кэш тем же пустым значением и на диск, поэтому разовый
+        # сбой DNS навсегда переводил эти хосты в остаток gTLD. Не кэшируем.
         return ""
     code = ""
     try:

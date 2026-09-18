@@ -12,6 +12,8 @@
   • оркестратор НЕ выполняет произвольных команд — он лишь ПЕРЕДАЁТ имя действия агенту,
     а тот сам сверяет со своим whitelist (защита в глубину).
   • токены нод хранятся в конфиге, наружу (в /nodes) НЕ отдаются.
+  • `deny_actions` у ноды в конфиге — действия, которые ей НЕ передаются даже
+    при target='all'; отказ виден в ответе и в аудите, а не проглатывается.
   • аудит в `data/orchestrator_audit.jsonl`; bind по умолчанию 127.0.0.1 (за Tunnel/VPN).
 
 Запуск:  python orchestrator.py
@@ -57,13 +59,24 @@ def load_config() -> dict:
         return {}
 
 
-def node_registry(cfg: dict) -> dict[str, dict]:
-    """`nodes` из конфига → {name: {url, token}}. Кривые записи пропускаются."""
+def node_registry(cfg: dict, dropped: "list | None" = None) -> dict[str, dict]:
+    """`nodes` из конфига → {name: {url, token}}.
+
+    Кривые записи пропускаются, но молча пропущенная нода уменьшает и счётчик в
+    /health, и охват target='all', ничем себя не обозначая: опечатка в ключе
+    ('ur' вместо 'url') просто сокращает флот. Передайте `dropped`, чтобы такие
+    записи были видны."""
     reg: dict[str, dict] = {}
     for n in cfg.get("nodes") or []:
         if isinstance(n, dict) and n.get("name") and n.get("url"):
+            deny = n.get("deny_actions") or []
             reg[str(n["name"])] = {"url": str(n["url"]).rstrip("/"),
-                                   "token": str(n.get("token", ""))}
+                                   "token": str(n.get("token", "")),
+                                   "deny": {str(a) for a in deny if isinstance(a, str)}}
+        else:
+            if dropped is not None:
+                dropped.append(n)
+            log.warning("orchestrator: запись ноды пропущена (нет name/url): %r", n)
     return reg
 
 
@@ -101,7 +114,10 @@ def _call_agent(node: dict, path: str, method: str = "GET",
 def _fanout(reg: dict[str, dict], path: str, method: str = "GET",
             payload: dict | None = None) -> dict:
     """Параллельно опрашивает все ноды, возвращает {name: результат}."""
-    out: dict[str, dict] = {}
+    # Засеваем словарь ДО запуска потоков: нода, не ответившая за 15 с, раньше
+    # исчезала из результата целиком, и /status показывал её как отсутствующую,
+    # а не как неответившую.
+    out: dict[str, dict] = {n: {"error": "timeout: агент не ответил за 15 с"} for n in reg}
     lock = threading.Lock()
 
     def worker(name: str, node: dict) -> None:
@@ -143,9 +159,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
-        reg = node_registry(self.cfg)
+        _dropped: list = []
+        reg = node_registry(self.cfg, dropped=_dropped)
         if path == "/health":
-            self._send(200, {"ok": True, "nodes": len(reg), "time": int(time.time())})
+            # skipped обязателен: сокращённый флот иначе выглядит просто как
+            # флот поменьше, без признака, что запись ноды была отброшена.
+            self._send(200, {"ok": not _dropped, "nodes": len(reg),
+                             "skipped": len(_dropped), "time": int(time.time())})
             return
         if not self._authed():
             _audit({"event": "deny", "path": path, "from": self.client_address[0]})
@@ -199,8 +219,22 @@ class Handler(BaseHTTPRequestHandler):
                 return
             _audit({"event": "run", "action": action, "target": target,
                     "from": self.client_address[0]})
+            # Запреты по узлу (deny_actions в конфиге). Узел может оставаться в
+            # реестре и получать одни действия, но не другие: gsa-02 исполняет
+            # boost-бандлы, но не должен получать цели (autopilot) и отдавать
+            # результаты (collect). Запрет держится ЗДЕСЬ, а не памятью о том,
+            # на какую кнопку не нажимать, и виден в ответе — молчаливое
+            # сокращение флота этот файл уже называет ошибкой выше.
+            denied = {n: nd for n, nd in chosen.items() if action in nd.get("deny", ())}
+            allowed = {n: nd for n, nd in chosen.items() if n not in denied}
+            if denied:
+                _audit({"event": "run_denied_by_node", "action": action,
+                        "nodes": sorted(denied), "from": self.client_address[0]})
             # оркестратор лишь передаёт имя действия — whitelist проверяет агент
-            result = _fanout(chosen, "/run", "POST", {"action": action})
+            result = _fanout(allowed, "/run", "POST", {"action": action}) if allowed else {}
+            for n in denied:
+                result[n] = {"skipped": f"действие '{action}' запрещено для узла "
+                                        f"(deny_actions в конфиге)"}
         else:  # /config — оркестратор лишь передаёт set, whitelist проверяет агент
             _audit({"event": "config_set", "target": target,
                     "from": self.client_address[0]})

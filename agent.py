@@ -91,13 +91,24 @@ _JOBS_LOCK = threading.Lock()
 _CONFIG_LOCK = threading.Lock()
 
 
-def load_config() -> dict:
+class ConfigUnreadable(Exception):
+    """Конфиг существует, но не разобран. Это НЕ пустой конфиг.
+
+    Раньше оба случая давали {}, и POST /config достраивал файл заново из
+    пустоты — то есть стирал gsa_projects_dir, agent_token, kpi_targets и всё
+    остальное, отвечая при этом ok:true. Ломается это на обычной опечатке в
+    руками правленом JSON, и до перезапуска агента ничего не заметно."""
+
+
+def load_config(strict: bool = False) -> dict:
     if not CONFIG_PATH.exists():
         return {}
     try:
         return json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
     except json.JSONDecodeError as exc:
         log.error("agent: битый конфиг %s: %s", CONFIG_PATH, exc)
+        if strict:
+            raise ConfigUnreadable(str(exc)) from exc
         return {}
 
 
@@ -324,7 +335,20 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, {"error": "no valid keys in 'set'"})
             return
         with _CONFIG_LOCK:
-            cfg = load_config()
+            try:
+                # strict: записывать поверх файла, который не удалось прочитать,
+                # значит уничтожить его содержимое.
+                cfg = load_config(strict=True)
+            except ConfigUnreadable as exc:
+                self._send(409, {
+                    "error": "config file is present but unreadable; refusing to "
+                             "overwrite it",
+                    "detail": str(exc),
+                    "path": str(CONFIG_PATH),
+                })
+                _audit({"event": "config_set_refused", "reason": "unreadable",
+                        "from": self.client_address[0]})
+                return
             cfg.update(clean)
             tmp = CONFIG_PATH.with_name(CONFIG_PATH.name + ".tmp")
             tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")

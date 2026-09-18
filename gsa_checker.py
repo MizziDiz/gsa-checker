@@ -680,7 +680,9 @@ def cmd_report(cfg: dict, args) -> None:
             f"Пропущено (уже существует в другом файле): {skip_global}\n"
             f"Пропущено (дубликат в текущем запуске): {skip_dup}\n"
             f"Пропущено (пустой URL): {skip_empty}\n"
-            f"GeoIP-добор Not Stated: {filled}\n")
+            # «GeoIP ничего не добрал» и «GeoIP не был доступен» — разные факты.
+            + (f"GeoIP-добор Not Stated: {filled}\n" if geo else
+               "GeoIP-добор Not Stated: н/д (GeoIP недоступен)\n"))
     def _grp_added(fn):   # прирост группы = остаток + все страны-члены
         return added.get(fn, 0) + sum(added.get(m, 0) for m in buckets.GROUP_MEMBERS.get(fn, ()))
     body_lines = [f"{label} {buckets.group_total(fn, post)} {buckets.fmt_added(_grp_added(fn))}"
@@ -708,7 +710,11 @@ def cmd_report(cfg: dict, args) -> None:
         print(f"✓ отчёт: {rep}")
         # сайдкар для дашборда: пофайловый прирост (в т.ч. по странам-членам сплита)
         # — отчёт-файл хранит только уровень групп, а сайту нужны детали для раскрытия.
-        detail = {"added": {k: int(v) for k, v in added.items() if v},
+        # Нули пишем тоже. Отфильтрованный сайдкар с нулевым приростом становился
+        # пустым словарём, а пустой словарь на стороне дашборда неотличим от
+        # «сайдкара нет» — и неделя честного нуля уходила в ветку weekly_deltas,
+        # где из живого остатка вычитается групповой итог отчёта.
+        detail = {"added": {k: int(v) for k, v in added.items()},
                   "totals": {k: int(post.get(k, 0)) for k in buckets.all_bucket_files()}}
         rep.with_suffix(".detail.json").write_text(
             json.dumps(detail, ensure_ascii=False), encoding="utf-8")
@@ -734,15 +740,23 @@ def cmd_report(cfg: dict, args) -> None:
     warn = ("\n⚠ <b>" + _status_line(status) + "</b>"
             if status and any(not ok for _, ok, _ in status) else
             ("\n" + _status_line(status) if status else ""))
-    tg = (f"📊 <b>GSA verified — недельная сводка</b> ({telegram_label(cfg)}){warn}\n"
+    # В dry-run приросты считаются так, как если бы запись прошла. Без пометки
+    # оператор получает тот же прирост дважды и учитывает его как реальный.
+    dry_prefix = "🧪 <b>[DRY-RUN — база НЕ изменена]</b>\n" if dry else ""
+    tg = (dry_prefix
+          + f"📊 <b>GSA verified — недельная сводка</b> ({telegram_label(cfg)}){warn}\n"
           f"Добавлено новых: <b>{total_added}</b>\n\n"
           + "\n".join(body_lines) + f"\n\n{ns_line}\n\n<b>ИТОГО {total_lines}</b>")
     telegram.send(cfg, tg)
     # Telegram, сообщение 2 — недобор по KPI (только если задан kpi_targets)
     if kpi:
-        telegram.send(cfg, kpi)
+        # Пометка об устаревшем сборе обязана быть и здесь. Именно по KPI судят
+        # о неделе, а без неё «+0 почти везде» читается как провальная неделя,
+        # а не как отсутствие свежих данных с серверов.
+        _kpi_warn = (warn.strip() + chr(10) + chr(10)) if warn.strip() else ''
+        telegram.send(cfg, dry_prefix + _kpi_warn + kpi)
     # Telegram, сообщение 3 — сводный вид «регион → все страны» (частями)
-    _send_chunked(cfg, _region_report_text(cfg, post, added))
+    _send_chunked(cfg, dry_prefix + _region_report_text(cfg, post, added))
 
 
 def cmd_ui_export(cfg: dict, args) -> None:
@@ -759,6 +773,12 @@ def cmd_ui_export(cfg: dict, args) -> None:
     out = base / f"Verified_{cfg.get('server_name', 'gsa')}_{stamp}.csv"
 
     ok = ui.export_verified(cfg, out, log)
+    if ok == "unstable":
+        # Размер файла не стабилизировался: GSA всё ещё пишет. Считать это
+        # готовой выгрузкой значит опубликовать недельный прирост, измеренный
+        # по куску файла.
+        sys.exit("UI-выгрузка НЕ ЗАВЕРШЕНА: размер файла не стабилизировался — "
+                 "GSA ещё пишет. Повторите позже или увеличьте ui_export_settle_sec.")
     if not ok:
         sys.exit("UI-выгрузка не удалась (см. лог выше). Настройте ui_export_* по --ui-check.")
     print(f"✓ verified-CSV выгружен: {out}")
@@ -945,7 +965,13 @@ def cmd_notify(cfg: dict, args) -> None:
     t = data["totals"]
     summary = (f"проектов {len(data['projects'])}, суммарный остаток {t['remaining']:,}, "
                f"verified {t['verified']:,}, на проверку {t['to_verify']:,}")
-    if heartbeat_s > 0:
+    if data.get("errors"):
+        # Нули в summary в этом случае означают «дойти до папки проектов не смогли»,
+        # а не «остаток нулевой». Зелёный пульс здесь превращает полный отказ сбора
+        # в сообщение об исправности; отметку времени не двигаем, чтобы следующий
+        # успешный прогон отчитался сразу.
+        emit("🔴 <b>GSA: сбор не удался</b>\n" + "; ".join(str(e) for e in data["errors"]))
+    elif heartbeat_s > 0:
         last_hb = state.get("heartbeat_ts")
         if last_hb is None:
             state["heartbeat_ts"] = now         # первый прогон только ставит отметку
@@ -958,8 +984,14 @@ def cmd_notify(cfg: dict, args) -> None:
     print(f"notify: {summary}")
 
 
-def _count_for(projects_dir: Path, base: str, globs: list[str]) -> int:
-    """Строки во всех файлах проекта <base>, чьё имя подходит под globs."""
+def _count_for(projects_dir: Path, base: str, globs: list[str],
+               errors: "list | None" = None) -> int:
+    """Строки во всех файлах проекта <base>, чьё имя подходит под globs.
+
+    Нечитаемый файл (шара отвалилась, файл занят GSA) раньше добавлял 0 и молчал —
+    то есть «прочитать не смогли» выглядело как «цели закончились», а это повод для
+    алерта о низком остатке. Передайте список `errors`, чтобы такие случаи были
+    видны вызывающему."""
     total = 0
     for pattern in globs:
         suffix = pattern.lstrip("*")          # "*.targets" → ".targets"
@@ -967,8 +999,9 @@ def _count_for(projects_dir: Path, base: str, globs: list[str]) -> int:
         if f.is_file():
             try:
                 total += count_lines(f)
-            except OSError:
-                pass
+            except OSError as exc:
+                if errors is not None:
+                    errors.append(f"{f.name}: {exc}")
     return total
 
 
@@ -991,7 +1024,9 @@ def collect_stats(cfg: dict) -> dict:
         base = prj.stem
         row = {"name": base}
         for metric, globs in metrics.items():
-            n = _count_for(projects_dir, base, globs)
+            # Ошибки чтения уходят в out["errors"], иначе нечитаемый .targets
+            # выглядит как «целей не осталось» и поднимает ложный алерт.
+            n = _count_for(projects_dir, base, globs, errors=out["errors"])
             row[metric] = n
             out["totals"][metric] += n
         out["projects"].append(row)
@@ -1145,6 +1180,12 @@ def cmd_create(cfg: dict, args) -> None:
         prj.set_value("Options", "pause project submissions", str(args.links_per_day))
         prj.set_value("Options", "pause project minutes", "1440")
         changed.append(f"лимит {args.links_per_day}/день")
+    # Разброс по ссылкам в период — в ноль на КАЖДОМ новом проекте.
+    # В шаблоне стоит 5, то есть GSA берёт лимит как N ± 5 сабмишенов, и
+    # заказанные N ссылок в сутки превращаются в «примерно N». Ставим ВНЕ ветки
+    # --links-per-day: проект, созданный без лимита, иначе унаследовал бы разброс шаблона.
+    prj.set_value("Options", "pause project submissions rnd", "0")
+    changed.append("разброс ссылок 0")
 
     # boost-обогащение: шаффл спинтакса (уникальность) + замена статичных полей + catch-all почта
     kw = kws_val.split(",")[0].strip() if kws_val else ""
@@ -1175,6 +1216,17 @@ def cmd_create(cfg: dict, args) -> None:
         if not src.exists():
             sys.exit(f"Источник целей не найден: {src}")
         targets = _read_targets(src, int(args.limit or 0))
+        pct = float(getattr(args, "sample_percent", 0) or 0)
+        if targets and 0 < pct < 100:
+            # Случайная доля базы на КАЖДЫЙ проект (15.09.2026, решение оператора):
+            # проекты одной страны получают разные подмножества одной базы, а не
+            # одну и ту же базу целиком. Свой генератор на проект, без общего seed —
+            # иначе два проекта на один бакет вытянут одинаковую выборку.
+            import random
+            n_full = len(targets)
+            k = max(1, int(round(n_full * pct / 100.0)))
+            targets = random.SystemRandom().sample(targets, k)
+            changed.append(f"выборка {pct:g}% базы: {k:,} из {n_full:,}")
 
     n_art = 0 if getattr(args, "no_articles", False) else int(
         getattr(args, "articles", 0) or cfg.get("articles_count", 20) or 20)
@@ -1222,24 +1274,53 @@ def cmd_import_boost(cfg: dict, args) -> None:
         print("Очередь boost пуста — импортировать нечего.")
         return
     exts = (".targets", ".articles", ".articles_idx")
-    imported = []
+    imported, failed = [], []
     for prj in prjs:
         mates = [prj] + [queue / (prj.stem + e) for e in exts]
         mates = [m for m in mates if m.exists()]
         print(f"  {'(dry) ' if dry else '+ '}{prj.stem}  [{', '.join(m.suffix for m in mates)}]")
         if dry:
             continue
-        for m in mates:
-            shutil.copy2(m, projects / m.name)          # в папку проектов GSA
-        done.mkdir(parents=True, exist_ok=True)
-        for m in mates:
-            shutil.move(str(m), str(done / m.name))     # из очереди → imported (не повторять)
+        # Один сбойный бандл НЕ должен останавливать очередь. 01.09.2026 очередь
+        # стояла одиннадцать дней из-за единственного проекта: заявку на уже
+        # обработанный сайт подали повторно, в imported лежала прежняя копия, и
+        # перенос поверх неё падал с PermissionError — файлы там принадлежат
+        # root с правами 0644, а нода ходит на шару другим пользователем.
+        # Цикл обрывался на первом же проекте, остальные 64 не импортировались
+        # НИКОГДА и молча. Теперь сбой одного бандла пропускается с громкой
+        # записью, а очередь идёт дальше.
+        try:
+            for m in mates:
+                shutil.copy2(m, projects / m.name)      # в папку проектов GSA
+            done.mkdir(parents=True, exist_ok=True)
+            for m in mates:
+                dst = done / m.name
+                # Переносим ПОВЕРХ прежней копии: повторная заявка на тот же
+                # сайт — обычное дело, и она должна вытеснять старую, а не
+                # упираться в неё. Прежнюю уводим в сторону, а не теряем.
+                if dst.exists():
+                    keep = dst.with_name(dst.name + ".superseded")
+                    if keep.exists():
+                        keep.unlink()
+                    dst.rename(keep)
+                shutil.move(str(m), str(dst))           # из очереди → imported
+        except OSError as exc:
+            failed.append((prj.stem, f"{type(exc).__name__}: {exc}"))
+            print(f"  ⚠ {prj.stem}: не импортирован ({type(exc).__name__}: {exc}) "
+                  f"— пропускаю, очередь идёт дальше")
+            continue
         imported.append(prj.stem)
 
     if dry:
         print(f"[dry-run] импортировали бы {len(prjs)} проект(ов); refresh не звал.")
         return
     print(f"✓ импортировано {len(imported)} проект(ов) в {projects}")
+    if failed:
+        # Громко и отдельным списком: молчаливый пропуск здесь уже стоил
+        # одиннадцати дней простоя очереди.
+        print(f"⚠ НЕ ИМПОРТИРОВАНО {len(failed)} проект(ов) — они остались в очереди:")
+        for name, why in failed:
+            print(f"    {name}: {why}")
     if imported:
         from lib import ui
         ok = ui.refresh(cfg, logging.getLogger("gsa_checker"))
@@ -1405,9 +1486,13 @@ def _distribute(cfg, projects_dir, eligible, selected, ext, apply, total_bytes, 
     # батчи уже захвачены (перенесены в used) выше — сразу рефреш
     selected = batches
     # один рефреш GSA в конце
+    refresh_ok = False
     try:
         from lib import ui
-        ui.refresh(cfg, logging.getLogger("gsa_checker"))
+        # ui.refresh сам глотает свой отказ подключения и возвращает False;
+        # раньше это значение отбрасывалось, и Telegram сообщал о выполненном
+        # рефреше, которого не было — targets оставались неподхваченными.
+        refresh_ok = bool(ui.refresh(cfg, logging.getLogger("gsa_checker")))
     except SystemExit:
         print("⚠ рефреш пропущен (pywinauto не установлен / не Windows).")
     except Exception as e:
@@ -1423,7 +1508,9 @@ def _distribute(cfg, projects_dir, eligible, selected, ext, apply, total_bytes, 
     })
     telegram.send(cfg, f"🤖 <b>Автопилот</b>\n{len(targets):,} целей поровну в {n} "
                        f"проект(ов) (~{len(targets)//n:,}/проект), батчей {len(selected)}. "
-                       "Рефреш выполнен.")
+                       + ("Рефреш выполнен." if refresh_ok else
+                          "⚠ РЕФРЕШ НЕ ПОДТВЕРЖДЁН — targets могли не подхватиться, "
+                          "нужен ручной refresh в GSA."))
 
 
 def cmd_autopilot(cfg: dict, args) -> None:
@@ -1607,7 +1694,8 @@ def cmd_emails(cfg: dict, args) -> None:
     print("─" * 60)
 
     if args.apply and not args.no_backup:
-        _snapshot_projects(cfg, prj_files, tag="emails")
+        if not _snapshot_projects(cfg, prj_files, tag="emails"):
+            sys.exit("Бэкап не удался — массовую правку не применяю.")
     done = 0
     for prj_path in prj_files:
         try:
@@ -1683,7 +1771,8 @@ def cmd_respin(cfg: dict, args) -> None:
     print("─" * 60)
 
     if args.apply and not args.no_backup:
-        _snapshot_projects(cfg, prj_files, tag="respin")
+        if not _snapshot_projects(cfg, prj_files, tag="respin"):
+            sys.exit("Бэкап не удался — массовую правку не применяю.")
     done = 0
     for prj_path in prj_files:
         try:
@@ -1778,7 +1867,8 @@ def cmd_settings(cfg: dict, args) -> None:
     print("─" * 60)
 
     if args.apply and not args.no_backup:
-        _snapshot_projects(cfg, prj_files, tag="settings")
+        if not _snapshot_projects(cfg, prj_files, tag="settings"):
+            sys.exit("Бэкап не удался — массовую правку не применяю.")
     changed_files = 0
     for prj_path in prj_files:
         try:
@@ -1929,6 +2019,8 @@ def main() -> None:
     ap.add_argument("--template", help="путь к template.prj (--create)")
     ap.add_argument("--out", help="папка вывода (--create)")
     ap.add_argument("--limit", type=int, default=0, help="макс. целей (--create)")
+    ap.add_argument("--sample-percent", type=float, default=0,
+                    help="случайная доля целей из источника, %% (--create; 0 = все)")
     ap.add_argument("--force", action="store_true", help="перезаписать (--create)")
     ap.add_argument("--anchor", action="append",
                     help="анкор (повторяемый; --create; в Anchor_Text, GSA крутит ≈ поровну)")

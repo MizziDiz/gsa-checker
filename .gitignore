@@ -14,3 +14,10 @@ selected_projects.txt
 
 # внутренний handoff-документ: реальные IP/hostname/роли узлов — не для публичного репо
 HANDOFF.md
+
+# ручные копии перед правкой и снимки сайта — историю теперь ведёт git
+*.bak
+*.bak-*
+*.bak_*
+_backups/
+site-backups/

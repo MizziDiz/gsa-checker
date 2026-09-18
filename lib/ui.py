@@ -258,9 +258,13 @@ def export_verified(cfg, out_path, log) -> bool:
                 stable = 0
             prev = size
         if out_path.exists() and out_path.stat().st_size > 0:
-            log.info(f"ui: выгрузка есть, но размер не стабилизировался → {out_path} "
-                     f"({out_path.stat().st_size:,} байт) — возможно, ещё пишется")
-            return True
+            # Раньше здесь возвращалось True, и недописанный файл шёл в недельный
+            # отчёт: измерялся только успевший сброситься префикс, а прирост
+            # выглядел настоящим. "unstable" — отдельное состояние; вызывающий
+            # решает, ждать ли ещё, но публиковать это как готовую выгрузку нельзя.
+            log.warning(f"ui: выгрузка есть, но размер НЕ стабилизировался → {out_path} "
+                        f"({out_path.stat().st_size:,} байт) — файл ещё пишется")
+            return "unstable"
         log.error(f"ui: файл не появился: {out_path}. Проверьте ui_export_menu_seq / "
                   f"ui_export_trigger_seq по --ui-check и ручным шагам.")
         return False

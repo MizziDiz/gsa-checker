@@ -55,16 +55,21 @@ def to_linux(p) -> str:
     return "/srv/share/" + m.group(1).replace("\\", "/") if m else s
 
 
-def resolve_dir(cfg_val, default_val, need_glob) -> Path:
+def resolve_dir(cfg_val, default_val, need_glob, required: bool = False):
     """Путь из конфига (после UNC→Linux), а если по нему нет нужных файлов —
-    фолбэк на несекретный default. Устойчиво к Windows-конфигу на Linux."""
+    фолбэк на несекретный default. Устойчиво к Windows-конфигу на Linux.
+
+    С required=True возвращает None, когда ни один кандидат не содержит нужных
+    файлов. Прежний безусловный фолбэк на непроверенный путь превращал
+    недостижимую шару в ноль по каждому бакету, и «Всего в базе 0» публиковалось
+    как измеренный итог с кодом выхода 0."""
     for cand in (to_linux(cfg_val) if cfg_val else None, default_val):
         if not cand:
             continue
         p = Path(cand)
         if p.is_dir() and any(p.glob(need_glob)):
             return p
-    return Path(default_val)
+    return None if required else Path(default_val)
 
 
 def bucket_totals(buckets_dir: Path) -> dict:
@@ -141,7 +146,11 @@ def weekly_deltas(totals: dict, latest: dict) -> dict:
 def compute_kpi(kpi_targets: list, deltas: dict) -> list:
     rows = []
     for kt in kpi_targets:
-        added = sum(deltas.get(f, 0) for f in kt["buckets"])
+        # Через _grp_add, как и остальные расчёты: страны-члены разделённых групп
+        # лежат в deltas отдельными ключами, и без их разворачивания каждая такая
+        # страна вносила в KPI ноль — «группа ничего не дала» становилось
+        # неотличимо от «данных о группе нет».
+        added = _grp_add(kt["buckets"], deltas)
         target = kt["target"]
         rows.append({"label": kt["label"], "target": target, "added": added,
                      "buckets": kt["buckets"], "deficit": max(target - added, 0)})
@@ -790,10 +799,16 @@ def _build_week(rep, wtotals, wdeltas, kpi_targets, kpi_files,
     return week
 
 
-def render_html(cfg, totals, reports, kpi_modes=None, member_added=None):
+def render_html(cfg, totals, reports, kpi_modes=None, member_added=None,
+                member_added_present=None):
     kpi_targets = cfg.get("kpi_targets", [])
     kpi_files = {f for kt in kpi_targets for f in kt["buckets"]}
     modes_cfg = kpi_modes or {}
+    # Различаем «сайдкар есть и в нём нули» от «сайдкара нет». Раньше оба давали
+    # пустой словарь, и честная нулевая неделя уходила в расчёт, который
+    # показывал большой отрицательный прирост как измеренный.
+    if member_added_present is None:
+        member_added_present = member_added is not None
     member_added = member_added or {}
 
     weeks = []
@@ -801,7 +816,7 @@ def render_html(cfg, totals, reports, kpi_modes=None, member_added=None):
         is_cur = i == len(reports) - 1
         if is_cur:                 # последняя неделя — по ЖИВЫМ бакетам; прирост из сайдкара (органика+добор)
             wtotals = totals
-            wdeltas = member_added if member_added else weekly_deltas(totals, rep)
+            wdeltas = member_added if member_added_present else weekly_deltas(totals, rep)
             weeks.append(_build_week(rep, wtotals, wdeltas, kpi_targets, kpi_files,
                                      is_current=True, member_added=member_added, modes_cfg=modes_cfg))
         else:                      # исторические — из самого отчёта (totals+added как есть) + режимы KPI
@@ -937,7 +952,12 @@ def main():
     cfg = load_config()
     defaults = json.loads(DEFAULTS_PATH.read_text(encoding="utf-8")) if DEFAULTS_PATH.exists() else {}
     buckets_dir = resolve_dir(cfg.get("buckets_dir"),
-                              defaults.get("buckets_dir", "/srv/share/Split/out_country_buckets"), "*.txt")
+                              defaults.get("buckets_dir", "/srv/share/Split/out_country_buckets"),
+                              "*.txt", required=True)
+    if buckets_dir is None:
+        # Без бакетов каждый счётчик станет нулём, и страница опубликует
+        # «Всего в базе 0» как измеренный факт. Лучше не пересобирать вовсе.
+        sys.exit("[dashboard] каталог бакетов недоступен — сайт не пересобираю")
     report_dir = resolve_dir(cfg.get("report_out_dir"),
                              defaults.get("report_out_dir", "/srv/share/Split/reports"), "gsa_report_*.txt")
     sys.stderr.write(f"[dashboard] buckets={buckets_dir}  reports={report_dir}\n")
@@ -950,20 +970,28 @@ def main():
         try:
             allm = json.loads(km.read_text(encoding="utf-8"))
             kpi_modes = {"old": allm["old"], "gsa": allm["gsa"]}   # только Старый + KPI GSA(«Новый»)
-        except (OSError, json.JSONDecodeError, KeyError):
-            pass
+        except (OSError, json.JSONDecodeError, KeyError) as exc:
+            # Молча пропущенный kpi_modes.json переводил расчёт на другой путь
+            # без единого признака, что настройка не применилась.
+            print(f"[dashboard] kpi_modes.json не прочитан: {exc}; режимы KPI не применены",
+                  file=sys.stderr)
     member_added = {}
+    member_added_present = False
     if reports:
         sc = Path(reports[-1]["path"]).with_suffix(".detail.json")
         if sc.exists():
             try:
                 member_added = json.loads(sc.read_text(encoding="utf-8")).get("added", {})
-            except (OSError, json.JSONDecodeError):
-                pass
+                member_added_present = True
+            except (OSError, json.JSONDecodeError) as exc:
+                # Нечитаемый сайдкар не равен ни его отсутствию, ни нулевому
+                # приросту. Оставляем present=False и говорим вслух.
+                print(f"[dashboard] сайдкар {sc.name} не прочитан: {exc}", file=sys.stderr)
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "index.html").write_text(
-        render_html(cfg, totals, reports, kpi_modes, member_added), encoding="utf-8")
+        render_html(cfg, totals, reports, kpi_modes, member_added,
+                    member_added_present=member_added_present), encoding="utf-8")
     print(f"OK: {out_dir/'index.html'}  (регионов: {len(totals)}, отчётов: {len(reports)}, "
           f"сумма базы: {sum(totals.values())})")
 

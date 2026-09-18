@@ -159,8 +159,15 @@ def main():
             pass
     for f in to_copy:
         shutil.copy2(f, dest / f.name)
+    # Маркер кодировал только свежесть. Центральный отчёт читает его mtime и
+    # показывает сервер как «собран 5 мин назад», не отличая полный сбор от
+    # намеренно выбранного подмножества — из-за чего просадка недельного
+    # прироста выглядит как настоящее падение выхлопа.
     (dest / "_collected.txt").write_text(
-        time.strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
+        f'{time.strftime("%Y-%m-%d %H:%M:%S")}\t'
+        f'files={len(to_copy)}\t'
+        f'mode={"invert" if invert else "subset"}\n',
+        encoding="utf-8")
     tail = ("Это ОТДЕЛЬНАЯ папка — в еженедельный мерж автоматически НЕ попадёт; "
             "мержить вручную при необходимости." if invert else
             "Дальше их подхватит центральный --report на шаре (мерж + Telegram).")
