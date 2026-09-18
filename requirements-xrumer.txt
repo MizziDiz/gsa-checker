@@ -1,0 +1,5 @@
+# Зависимость ТОЛЬКО для xrumer_mcp.py (MCP-сервер XRumer). В основной requirements.txt
+# не входит: на ноды/шару для gsa-checker пакет mcp не нужен. Ставить в отдельный venv:
+#   python3 -m venv /root/.venvs/xrumer-mcp
+#   /root/.venvs/xrumer-mcp/bin/pip install -r requirements-xrumer.txt
+mcp>=2,<3

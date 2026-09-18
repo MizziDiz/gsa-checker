@@ -98,6 +98,16 @@
   "intake_report": true,
   "intake_report_mention": "@your_telegram_username",
 
+  "xrumer": {
+    "host": "ru",
+    "key_file": "data/ops/xrumer_mcp.key",
+    "node": "gsa-03",
+    "smb_host": "REPLACE_WITH_NODE_IP",
+    "smb_share": "C$",
+    "smb_cred": "data/ops/smb_gsa-03.cred",
+    "smb_root": ""
+  },
+
   "stats_snapshots": true,
   "eta_window_min": 180,
   "stats_retention_days": 30,
