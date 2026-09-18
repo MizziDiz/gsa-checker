@@ -105,7 +105,16 @@
     "smb_host": "REPLACE_WITH_NODE_IP",
     "smb_share": "C$",
     "smb_cred": "data/ops/smb_gsa-03.cred",
-    "smb_root": ""
+    "smb_root": "",
+    "autopilot": {
+      "pool_dir": "/srv/share/Aparser results",
+      "used_dir": "/srv/share/Aparser results used",
+      "batch_glob": "*.txt",
+      "batch_limit_mb": 120,
+      "base": "Autopilot.txt",
+      "local_base_dir": "/srv/share/xrumer/bases",
+      "max_base_lines": 1000000
+    }
   },
 
   "stats_snapshots": true,
