@@ -26,6 +26,7 @@ import argparse
 import fnmatch
 import json
 import logging
+import os
 import re
 import sys
 import time
@@ -1600,7 +1601,7 @@ def _snapshot_projects(cfg: dict, prj_files: list, tag: str = "") -> "Path | Non
     случай (в отличие от .prj.bak, который перезаписывается). Прунит старые снимки до
     backup_keep. Возвращает путь снимка или None (если backup_dir не задан)."""
     import shutil
-    root = cfg.get("backup_dir", "")
+    root = _backup_root(cfg)
     if not root or not prj_files:
         return None
     server = str(cfg.get("server_name", "gsa")).strip() or "gsa"
@@ -1637,10 +1638,485 @@ def _stamp_notes(prj, text: str) -> None:
     prj.set_value("Options", "notes", (cur + "\\n" + stamp) if cur else stamp)
 
 
+def _backup_root(cfg: dict) -> str:
+    """Куда класть снимки: backup_dir из конфига, а если он не задан — папка
+    gsa_project_backups рядом с success_share_dir на шаре. Так узел без backup_dir
+    всё равно кладёт снимки туда, где их видит сервер (07.09: gsa-03 отвечал
+    «Не задан backup_dir», и свежих .prj с него было не снять)."""
+    root = str(cfg.get("backup_dir", "") or "").strip()
+    if root:
+        return root
+    share = str(cfg.get("success_share_dir", "") or "").strip()
+    if share:
+        from pathlib import PureWindowsPath
+        base = PureWindowsPath(share) if "\\" in share else Path(share)
+        return str(base.parent / "gsa_project_backups")
+    return ""
+
+
+_SITELIST_KEYS = ("use site list", "use site list type", "user defined site list")
+
+
+def _dir_listing(d: Path, limit: int = 15) -> list[str]:
+    """Строки описи одной папки: число файлов, объём, свежайшие файлы с датами
+    (местное время узла)."""
+    try:
+        files = [f for f in d.iterdir() if f.is_file()]
+    except OSError as e:
+        return [f"  <не прочитана: {e}>"]
+    stats = []
+    for f in files:
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        stats.append((st.st_mtime, st.st_size, f.name))
+    stats.sort(reverse=True)
+    total = sum(s[1] for s in stats)
+    out = [f"  файлов {len(stats)}, {total / 1e6:.1f} МБ"]
+    for mt, size, name in stats[:limit]:
+        out.append(f"  {time.strftime('%Y-%m-%d %H:%M', time.localtime(mt))}  {size:>10}  "
+                   f"{_count_lines(d / name):>7} строк  {name}")
+    if len(stats) > limit:
+        out.append(f"  … ещё {len(stats) - limit}, самый старый "
+                   f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(stats[-1][0]))}")
+    return out
+
+
+def _tree_summary(root: Path, depth: int = 2, max_dirs: int = 60) -> list[str]:
+    """Подпапки до глубины depth: число файлов и дата свежайшего файла в каждой."""
+    out = []
+    seen = 0
+    for cur, dirs, files in os.walk(root):
+        rel = Path(cur).relative_to(root)
+        if len(rel.parts) >= depth:
+            dirs[:] = []
+        newest = 0.0
+        total = 0
+        for name in files:
+            try:
+                st = (Path(cur) / name).stat()
+            except OSError:
+                continue
+            newest = max(newest, st.st_mtime)
+            total += st.st_size
+        when = time.strftime('%Y-%m-%d %H:%M', time.localtime(newest)) if newest else "-"
+        out.append(f"  {str(rel) if rel.parts else '.':<60} файлов {len(files):>6}  {total / 1e6:>8.1f} МБ  свежайший {when}")
+        seen += 1
+        if seen >= max_dirs:
+            out.append("  … обрезано")
+            break
+    return out
+
+
+def _count_lines(f: Path, cap: int = 200 * 1024 * 1024) -> int:
+    """Число строк файла (до cap байт; больше — -1)."""
+    try:
+        if f.stat().st_size > cap:
+            return -1
+        n = 0
+        with open(f, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                n += chunk.count(b"\n")
+        return n
+    except OSError:
+        return -1
+
+
+_DATE_RE = re.compile(rb"(20\d\d-\d\d-\d\d) \d\d:\d\d")
+
+
+def _project_files_report(projects_dir: Path, detail_names: set[str], days: int = 60) -> list[str]:
+    """Рабочие файлы каждого проекта (размер, строки) и для избранных проектов —
+    раскладка по дням дат, встречающихся в строках .verify/.done/.success/.skip:
+    сколько проект подавал и подтверждал в день по его же файлам, без GSA."""
+    out = ["## рабочие файлы проектов (размер, строки)"]
+    exts = ("targets", "new_targets", "urls_done", "hosts_done", "done", "verify", "success", "skip", "submitted", "failed")
+    since = time.strftime('%Y-%m-%d', time.localtime(time.time() - days * 86400))
+    histo: dict[str, dict[str, dict[str, int]]] = {}
+    for prj in sorted(projects_dir.glob("*.prj")):
+        stem = prj.name[:-4]
+        parts = []
+        for ext in exts:
+            f = projects_dir / f"{stem}.{ext}"
+            if f.is_file():
+                try:
+                    size = f.stat().st_size
+                except OSError:
+                    size = -1
+                parts.append(f"{ext}={size}/{_count_lines(f)}")
+                if stem in detail_names and ext in ("verify", "done", "success", "skip") and 0 <= size <= 50 * 1024 * 1024:
+                    try:
+                        data = f.read_bytes()
+                    except OSError:
+                        continue
+                    per = histo.setdefault(stem, {}).setdefault(ext, {})
+                    for line in data.split(b"\n"):
+                        m = _DATE_RE.search(line)
+                        if m:
+                            d = m.group(1).decode()
+                            if d >= since:
+                                per[d] = per.get(d, 0) + 1
+        out.append(f"{stem}\t" + "  ".join(parts))
+    out.append("")
+    out.append(f"## по дням с {since}: даты в строках рабочих файлов избранных проектов (файл: день=строк)")
+    for stem, per_ext in histo.items():
+        for ext, per in per_ext.items():
+            if per:
+                out.append(f"{stem}.{ext}\t" + " ".join(f"{d[5:]}={n}" for d, n in sorted(per.items())))
+    return out
+
+
+def _list_host(u: str) -> str:
+    from urllib.parse import urlsplit
+    try:
+        h = urlsplit(u.strip()).hostname or ""
+    except ValueError:
+        return ""
+    return h[4:] if h.startswith("www.") else h
+
+
+def _list_supply_report(projects_dir: Path, prj_lists: dict[str, list[str]], out_dir: Path) -> list[str]:
+    """Поставка списков по движкам для проектов с включёнными списками: на каждый
+    файл списка — строк, хостов, сколько хостов уже есть в .success проекта и
+    включён ли движок в проекте. Показывает, есть ли проекту что брать."""
+    out = ["## поставка списков по движкам (только включённые в проекте движки; файл: строк / хостов / хостов уже в .success)"]
+    for stem in sorted(prj_lists):
+        prj = projects_dir / f"{stem}.prj"
+        try:
+            raw = prj.read_bytes().decode("latin-1")
+        except OSError:
+            continue
+        flags: dict[str, str] = {}
+        for line in raw.splitlines():
+            if line.endswith("=1") or line.endswith("=0"):
+                k, v = line.rsplit("=", 1)
+                flags[k] = v
+        succ_hosts: set[str] = set()
+        sf = projects_dir / f"{stem}.success"
+        if sf.is_file():
+            try:
+                for line in sf.read_bytes().split(b"\n"):
+                    h = _list_host(line.split(b"\xff")[0].decode("latin-1", "replace"))
+                    if h:
+                        succ_hosts.add(h)
+            except OSError:
+                pass
+        # история попыток: .urls_done — всё, что проект уже брал в работу (успех или отказ)
+        # История попыток GSA: .hosts_done и .urls_done хранят не строки, а 32-битные хэши
+        # вида HHHHHHHH:N. Функцию хэша подбираем по хостам из .success (они точно пробовались):
+        # кандидаты — crc32 / adler32 от хоста в нескольких написаниях.
+        done_hashes: set[int] = set()
+        done_lines = 0
+        samples: list[str] = []
+        hf = projects_dir / f"{stem}.hosts_done"
+        if hf.is_file():
+            try:
+                for line in hf.read_bytes().split(b"\n"):
+                    s = line.strip()
+                    if not s:
+                        continue
+                    done_lines += 1
+                    tok = s.split(b":")[0].decode("latin-1", "replace")
+                    if len(samples) < 2:
+                        samples.append(s.decode("latin-1", "replace")[:40])
+                    try:
+                        done_hashes.add(int(tok, 16))
+                    except ValueError:
+                        pass
+            except OSError:
+                pass
+        import zlib
+        succ_raw: list[str] = []
+        if sf.is_file():
+            try:
+                for line in sf.read_bytes().split(b"\n")[:3000]:
+                    u = line.split(b"\xff")[0].decode("latin-1", "replace").strip()
+                    if "://" in u:
+                        from urllib.parse import urlsplit
+                        try:
+                            hn = urlsplit(u).hostname or ""
+                        except ValueError:
+                            hn = ""
+                        if hn:
+                            succ_raw.append(hn)
+            except OSError:
+                pass
+        cands = {
+            "crc32(host)": lambda h: zlib.crc32(h.encode("latin-1", "replace")) & 0xFFFFFFFF,
+            "crc32(host без www)": lambda h: zlib.crc32((h[4:] if h.startswith("www.") else h).encode("latin-1", "replace")) & 0xFFFFFFFF,
+            "crc32(HOST верхним)": lambda h: zlib.crc32(h.upper().encode("latin-1", "replace")) & 0xFFFFFFFF,
+            "crc32(www.host)": lambda h: zlib.crc32(("www." + h if not h.startswith("www.") else h).encode("latin-1", "replace")) & 0xFFFFFFFF,
+            "adler32(host)": lambda h: zlib.adler32(h.encode("latin-1", "replace")) & 0xFFFFFFFF,
+            "adler32(host без www)": lambda h: zlib.adler32((h[4:] if h.startswith("www.") else h).encode("latin-1", "replace")) & 0xFFFFFFFF,
+        }
+        best_name, best_rate, best_fn = "", 0.0, None
+        probe = succ_raw[:2000]
+        if done_hashes and probe:
+            for name, fn in cands.items():
+                rate = sum(fn(h) in done_hashes for h in probe) / len(probe)
+                if rate > best_rate:
+                    best_name, best_rate, best_fn = name, rate, fn
+        on_engines = sum(1 for v in flags.values() if v == "1")
+        out.append(f"[{stem}] движков включено {on_engines}, хостов в .success {len(succ_hosts)}, "
+                   f"записей в .hosts_done {done_lines} (образцы: {' | '.join(samples)}); "
+                   f"подбор хэша по {len(probe)} хостам .success: лучший «{best_name}» совпадает на {best_rate:.0%}"
+                   + ("" if best_rate >= 0.5 else " — функция не подобрана, покрытие не считается"))
+        host_hash = best_fn if best_rate >= 0.5 else None
+        def tried(h: str) -> bool:
+            if host_hash is None:
+                return False
+            return host_hash(h) in done_hashes or host_hash("www." + h) in done_hashes
+        done_hosts: set[str] = set()   # совместимость с кодом ниже: считаем через tried()
+        for folder in prj_lists[stem]:
+            d = Path(folder)
+            if not d.is_dir():
+                out.append(f"  {folder}: НЕТ ПАПКИ")
+                continue
+            files = sorted(d.glob("sitelist_*.txt"))
+            skipped_off = 0
+            folder_hosts: set[str] = set()
+            out.append(f"  {folder}  (файлов {len(files)})")
+            for f in files:
+                eng = f.stem[len("sitelist_"):].split("-", 1)[-1]
+                on = flags.get(eng, "?")
+                if on != "1":
+                    skipped_off += 1
+                    continue
+                try:
+                    if f.stat().st_size > 30 * 1024 * 1024:
+                        out.append(f"    {f.name}: больше 30 МБ, пропущен")
+                        continue
+                    hosts: set[str] = set()
+                    n = 0
+                    for line in f.read_bytes().split(b"\n"):
+                        if not line.strip():
+                            continue
+                        n += 1
+                        h = _list_host(line.decode("latin-1", "replace"))
+                        if h:
+                            hosts.add(h)
+                except OSError:
+                    continue
+                folder_hosts |= hosts
+                if n:
+                    tr = sum(tried(h) for h in hosts)
+                    out.append(f"    {f.name}: строк {n}, хостов {len(hosts)}, уже в .success {len(hosts & succ_hosts)}, "
+                               f"уже пробовались (.hosts_done) {tr}")
+            out.append(f"    … файлов движков, выключенных в проекте или неизвестных: {skipped_off}")
+            tr_all = sum(tried(h) for h in folder_hosts)
+            out.append(f"    ИТОГО по папке (включённые движки): хостов {len(folder_hosts)}, "
+                       f"из них в .success {len(folder_hosts & succ_hosts)}, уже пробовались {tr_all}, "
+                       f"ещё не пробовались {len(folder_hosts) - tr_all}")
+            # множество хостов папки — рядом со снимком, для суточных сравнений «сколько хостов появилось впервые»
+            try:
+                slug = re.sub(r"[^A-Za-z0-9]+", "_", d.name).strip("_")[:60]
+                (out_dir / f"hosts_{stem[:20].replace(' ', '_')}_{slug}.txt").write_text(
+                    "\n".join(sorted(folder_hosts)) + "\n", encoding="utf-8")
+            except OSError:
+                pass
+    return out
+
+
+def _sitelist_inventory(cfg: dict, projects_dir: Path, out_dir: Path | None = None) -> str:
+    """Опись списков сайтов: настройки site list каждого .prj (всех, без фильтра
+    --only) и содержимое папок, на которые они ссылаются, плюс штатные site_list-*
+    GSA и папки подписок (Dropbox, C:\\Sitelists). Нужна, чтобы с шары видеть,
+    откуда проекты берут цели и когда списки обновлялись."""
+    out = [f"# опись списков сайтов, {time.strftime('%Y-%m-%d %H:%M')} по часам узла, "
+           f"проекты: {projects_dir}", "", "## настройки проектов",
+           "проект\tuse site list\ttype\tuser defined site list"]
+    folders: dict[str, set[str]] = {}
+    prj_lists: dict[str, list[str]] = {}
+    for prj in sorted(projects_dir.glob("*.prj")):
+        try:
+            raw = prj.read_bytes().decode("latin-1")
+        except OSError as e:
+            out.append(f"{prj.name}\t<не прочитан: {e}>")
+            continue
+        vals: dict[str, str] = {}
+        for line in raw.splitlines():
+            for k in _SITELIST_KEYS:
+                if line.startswith(k + "="):
+                    vals[k] = line[len(k) + 1:].strip()
+        out.append(f"{prj.name}\t{vals.get('use site list', '?')}\t{vals.get('use site list type', '?')}"
+                   f"\t{vals.get('user defined site list', '')}")
+        for part in vals.get("user defined site list", "").split("|"):
+            m = re.match(r"^(\d):(.+?);(\d+)$", part.strip())
+            if m:
+                tag = "on" if m.group(1) == "1" else "off"
+                folders.setdefault(m.group(2), set()).add(f"{prj.name}[{tag}]")
+                if vals.get("use site list") == "1" and m.group(1) == "1":
+                    prj_lists.setdefault(prj.name[:-4], []).append(m.group(2))
+    for name in ("site_list-identified", "site_list-success", "site_list-verify", "site_list-failed"):
+        folders.setdefault(str(projects_dir.parent / name), set()).add("<GSA>")
+    detail = {ln.split("\t")[0][:-4] for ln in out[4:]
+              if ln.count("\t") >= 2 and (ln.split("\t")[1] == "1" or not ln.startswith("Split"))}
+    out += [""] + _project_files_report(projects_dir, detail)
+    out += [""] + _list_supply_report(projects_dir, prj_lists, out_dir or projects_dir)
+    out += ["", "## папки списков из проектов и штатные GSA"]
+    for folder in sorted(folders):
+        d = Path(folder)
+        users = ", ".join(sorted(folders[folder]))
+        if not d.is_dir():
+            out.append(f"[{folder}] НЕТ ПАПКИ  ({users})")
+            continue
+        out.append(f"[{folder}]  ({users})")
+        out += _dir_listing(d)
+    out += ["", "## папки подписок и списков на узле"]
+    candidates = [Path.home() / "Dropbox", Path("C:/Dropbox"), Path("C:/Sitelists"),
+                  Path("C:/Users/Administrator/Dropbox"), Path("D:/Dropbox")]
+    roots: list[Path] = []
+    for c in candidates:
+        if c.is_dir() and not any(c.resolve() == r.resolve() for r in roots):
+            roots.append(c)
+    for c in roots:
+        out.append(f"[{c}]")
+        out += _tree_summary(c)
+    # Полный листинг каждой папки списков подписок (глубина 2, включая конфликтные
+    # копии Dropbox) — по датам и размерам видно, сколько и когда приходило.
+    out += ["", "## файлы в папках подписок (свежайшие 8 в каждой)"]
+    for c in roots:
+        try:
+            level1 = sorted(d for d in c.iterdir() if d.is_dir() and not d.name.startswith("."))
+        except OSError:
+            continue
+        for d1 in level1:
+            try:
+                level2 = sorted(d for d in d1.iterdir() if d.is_dir())
+            except OSError:
+                continue
+            for d2 in level2:
+                out.append(f"[{d2}]")
+                out += _dir_listing(d2, limit=8)
+    return "\n".join(out) + "\n"
+
+
+_LOG_KEYS = (
+    ("submitted", "submitted"), ("verified", "verified"), ("registr", "registration"),
+    ("verification", "verification"), ("captcha", "captcha"), ("sitekey", "sitekey"),
+    ("already parsed", "already parsed"), ("no engine", "no engine matches"),
+    ("download failed", "download failed"), ("proxy", "proxy"), ("pop3", "pop3"),
+    ("e-mail", "e-mail"), ("error", "error"),
+)
+_LOG_DATE_RES = (
+    re.compile(rb"(20\d\d)-(\d\d)-(\d\d)"),
+    re.compile(rb"(\d\d)\.(\d\d)\.(20\d\d)"),
+    re.compile(rb"\b(\d{1,2})/(\d{1,2})/(20\d\d)"),
+)
+_LOG_PROJ_RE = re.compile(rb"\[([^\]\r\n]{2,48})\]")
+
+
+def _log_candidates(cfg: dict) -> list[Path]:
+    """Где искать тяжёлые логи GSA/XEvil на узле: корень GSA (рядом с projects),
+    рабочий стол/документы/загрузки администратора, типовые папки."""
+    roots: list[Path] = []
+    proj = Path(cfg.get("gsa_projects_dir", ""))
+    if proj.is_dir():
+        roots.append(proj.parent)
+    home = Path.home()
+    for extra in (home / "Desktop", home / "Documents", home / "Downloads", Path("C:/A-GSA"),
+                  Path("C:/GSA"), Path("C:/logs"), Path("C:/XEvil"), Path("C:/Users/Administrator/Desktop"),
+                  Path("C:/Users/Administrator/Documents"), Path("C:/Users/Administrator/Downloads")):
+        if extra.is_dir() and not any(extra.resolve() == r.resolve() for r in roots):
+            roots.append(extra)
+    found: list[Path] = []
+    now = time.time()
+    for root in roots:
+        for depth_root, dirs, files in os.walk(root):
+            rel = Path(depth_root).relative_to(root)
+            if len(rel.parts) >= 2:
+                dirs[:] = []
+            if any(part.lower() in ("debug", "projects", "site_list-identified", "site_list-success",
+                                    "site_list-verify", "site_list-failed", "dropbox", ".git") for part in rel.parts):
+                dirs[:] = []
+                continue
+            for name in files:
+                low = name.lower()
+                if not low.endswith((".log", ".txt", ".csv")) or low.startswith("sitelist_"):
+                    continue
+                f = Path(depth_root) / name
+                try:
+                    st = f.stat()
+                except OSError:
+                    continue
+                if st.st_size >= 1024 * 1024 and now - st.st_mtime <= 14 * 86400:
+                    found.append(f)
+    found.sort(key=lambda f: -f.stat().st_size)
+    return found[:12]
+
+
+def _log_extract(cfg: dict, dest: Path) -> list[str]:
+    """Сводка по тяжёлым логам без копирования их целиком: по каждому файлу — размер,
+    даты, образцы строк, счётчики строк по дням и ключевым словам, суточные
+    submitted/verified по проектам (первый [..] в строке); рядом — хвост 3 МБ."""
+    out = [f"# сводка логов узла, {time.strftime('%Y-%m-%d %H:%M')} по часам узла"]
+    files = _log_candidates(cfg)
+    if not files:
+        out.append("подходящих файлов не найдено (.log/.txt/.csv от 1 МБ, моложе 14 дней, вне debug/projects/Dropbox)")
+        return out
+    for f in files:
+        st = f.stat()
+        out += ["", f"## {f}", f"размер {st.st_size / 1e6:.1f} МБ, изменён {time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime))}"]
+        per_day: dict[str, dict[str, int]] = {}
+        per_day_proj: dict[str, dict[str, dict[str, int]]] = {}
+        samples: list[str] = []
+        lines = 0
+        try:
+            with open(f, "rb") as fh:
+                for raw in fh:
+                    lines += 1
+                    if len(samples) < 3 and raw.strip():
+                        samples.append(raw.decode("utf-8", "replace").strip()[:160])
+                    day = "?"
+                    for rx in _LOG_DATE_RES:
+                        m = rx.search(raw[:40])
+                        if m:
+                            g = [x.decode() for x in m.groups()]
+                            day = f"{g[0]}-{g[1]}-{g[2]}" if len(g[0]) == 4 else f"{g[2]}-{g[1].zfill(2)}-{g[0].zfill(2)}"
+                            break
+                    low = raw.lower()
+                    d = per_day.setdefault(day, {})
+                    d["строк"] = d.get("строк", 0) + 1
+                    for needle, label in _LOG_KEYS:
+                        if needle.encode() in low:
+                            d[label] = d.get(label, 0) + 1
+                            if label in ("submitted", "verified"):
+                                pm = _LOG_PROJ_RE.search(raw)
+                                proj = pm.group(1).decode("utf-8", "replace") if pm else "?"
+                                per_day_proj.setdefault(day, {}).setdefault(proj, {})
+                                per_day_proj[day][proj][label] = per_day_proj[day][proj].get(label, 0) + 1
+        except OSError as e:
+            out.append(f"не прочитан: {e}")
+            continue
+        out.append(f"строк {lines}")
+        out.append("образцы: " + " | ".join(samples))
+        out.append("по дням (строк; ключевые слова):")
+        for day in sorted(per_day)[-45:]:
+            d = per_day[day]
+            out.append(f"  {day}: " + ", ".join(f"{k}={v}" for k, v in sorted(d.items(), key=lambda kv: -kv[1])[:14]))
+        out.append("по дням и проектам, submitted/verified (верх 25 проектов за день):")
+        for day in sorted(per_day_proj)[-45:]:
+            rows = sorted(per_day_proj[day].items(), key=lambda kv: -(kv[1].get("submitted", 0) + kv[1].get("verified", 0)))[:25]
+            out.append(f"  {day}: " + "; ".join(f"{pr}: s={v.get('submitted', 0)} v={v.get('verified', 0)}" for pr, v in rows))
+        # хвост 3 МБ рядом со снимком
+        try:
+            tail_name = "logtail_" + re.sub(r"[^A-Za-z0-9._-]+", "_", f.name)[:80]
+            with open(f, "rb") as fh:
+                fh.seek(max(0, st.st_size - 3 * 1024 * 1024))
+                (dest / tail_name).write_bytes(fh.read())
+            out.append(f"хвост 3 МБ → {tail_name}")
+        except OSError as e:
+            out.append(f"хвост не скопирован: {e}")
+    return out
+
+
 def cmd_backup(cfg: dict, args) -> None:
-    """Снимок всех .prj (фильтр --only) в backup_dir — на всякий случай, с историей."""
-    if not cfg.get("backup_dir"):
-        sys.exit("Не задан backup_dir (куда складывать бэкапы проектов).")
+    """Снимок всех .prj (фильтр --only) в backup_dir — на всякий случай, с историей.
+    Рядом кладёт sitelists_inventory.txt — опись списков сайтов по всем .prj,
+    и gsa_log_summary.txt — сводку по тяжёлым логам узла с хвостами."""
+    if not _backup_root(cfg):
+        sys.exit("Не задан backup_dir и не выводится из success_share_dir (куда складывать бэкапы проектов).")
     target_dir = Path(args.dir or cfg.get("gsa_projects_dir", ""))
     if not target_dir.is_dir():
         sys.exit(f"Папка с .prj не найдена: {target_dir}")
@@ -1650,8 +2126,38 @@ def cmd_backup(cfg: dict, args) -> None:
     if not prj_files:
         print(f"В {target_dir} нет .prj (фильтр --only={args.only!r})")
         return
-    if not _snapshot_projects(cfg, prj_files, tag="manual"):
+    dest = _snapshot_projects(cfg, prj_files, tag="manual")
+    if not dest:
         sys.exit("Бэкап не удался.")
+    try:
+        inv = dest / "sitelists_inventory.txt"
+        inv.write_text(_sitelist_inventory(cfg, target_dir, dest), encoding="utf-8")
+        print(f"✓ опись списков сайтов → {inv}")
+    except OSError as e:
+        print(f"⚠ опись списков не записана: {e}", file=sys.stderr)
+    # История попыток проектов не-Split (.hosts_done/.urls_done — хэши, без URL и секретов):
+    # копируем в снимок, чтобы функцию хэша можно было подобрать на сервере, а не на узле.
+    import shutil
+    copied = 0
+    for prj in sorted(target_dir.glob("*.prj")):
+        if prj.name.startswith("Split"):
+            continue
+        for ext in ("hosts_done", "urls_done"):
+            f = target_dir / f"{prj.name[:-4]}.{ext}"
+            if f.is_file() and f.stat().st_size <= 20 * 1024 * 1024:
+                try:
+                    shutil.copy2(f, dest / f.name)
+                    copied += 1
+                except OSError:
+                    pass
+    if copied:
+        print(f"✓ файлов истории попыток скопировано: {copied}")
+    try:
+        summ = dest / "gsa_log_summary.txt"
+        summ.write_text("\n".join(_log_extract(cfg, dest)) + "\n", encoding="utf-8")
+        print(f"✓ сводка логов → {summ}")
+    except OSError as e:
+        print(f"⚠ сводка логов не записана: {e}", file=sys.stderr)
 
 
 def cmd_emails(cfg: dict, args) -> None:
@@ -1919,46 +2425,240 @@ def cmd_check(cfg: dict) -> None:
             print(f"  {ext or '(без расширения)':<14} {n}")
 
 
-def cmd_gsa_log(cfg: dict, args) -> None:
-    """Читает файловый лог GSA SER (read-only). Ищет *.log в gsa_log_dir (конфиг),
-    <projects>/../log, <projects>/.., <gsa_exe>/log, <gsa_exe>/... Печатает последние N строк
-    новейшего; с --mail — только строки про почту/верификацию. Если *.log нет — показывает
-    .log/.txt в этих папках (найти debug-лог, который GSA мог положить нестандартно)."""
+# Признаки причины неудачи в HTML-дампе GSA: подстрока в теле → человеческая метка.
+DUMP_SIGNS: tuple[tuple[str, str], ...] = (
+    ("captcha", "капча"),
+    ("recaptcha", "капча"),
+    ("cloudflare", "Cloudflare/WAF"),
+    ("access denied", "доступ запрещён"),
+    ("forbidden", "доступ запрещён"),
+    ("403 ", "доступ запрещён"),
+    ("404 ", "страница не найдена"),
+    ("not found", "страница не найдена"),
+    ("blocked", "блокировка"),
+    ("banned", "блокировка"),
+    ("spam", "антиспам"),
+    ("moderat", "премодерация"),
+    ("login", "требуется вход"),
+    ("register", "требуется регистрация"),
+    ("<error>", "ошибка приложения"),
+    ("database error", "ошибка БД сайта"),
+)
+
+MAIL_WORDS = ("e-mail", "email", "pop3", "verif", "activat", "confirm", "почт")
+
+
+def gsa_debug_dir(cfg: dict) -> Path | None:
+    """Папка дампов GSA SER. Приоритет: gsa_debug_dir из конфига, затем стандартная
+    %APPDATA%/GSA Search Engine Ranker/debug, затем debug/ рядом с projects/exe."""
     cand: list[Path] = []
-    if cfg.get("gsa_log_dir"):
-        cand.append(Path(cfg["gsa_log_dir"]))
-    if cfg.get("gsa_projects_dir"):
-        base = Path(cfg["gsa_projects_dir"]).parent
-        cand += [base / "log", base]
-    if cfg.get("gsa_exe_path"):
-        base = Path(cfg["gsa_exe_path"]).parent
-        cand += [base / "log", base]
-    dirs, seen = [], set()
+    for key in ("gsa_debug_dir", "gsa_log_dir"):
+        if cfg.get(key):
+            cand.append(Path(cfg[key]))
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        cand.append(Path(appdata) / "GSA Search Engine Ranker" / "debug")
+    for key in ("gsa_projects_dir", "gsa_exe_path"):
+        if cfg.get(key):
+            cand.append(Path(cfg[key]).parent / "debug")
     for d in cand:
-        if d.is_dir() and str(d) not in seen:
-            seen.add(str(d))
-            dirs.append(d)
-    found = [p for d in dirs for p in d.glob("*.log")]
-    if not found:
-        # лог не в стандартном месте (debug-режим мог класть иначе) — покажем, что есть
-        print("GSA *.log не найден. Содержимое кандидат-папок (.log/.txt):")
-        for d in dirs:
-            names = sorted(p.name for p in d.iterdir()
-                           if p.is_file() and p.suffix.lower() in (".log", ".txt"))[:20]
-            print(f"  {d}\n     {names or '— нет .log/.txt'}")
-        print("Найдёшь debug-лог — задай его папку через gsa_log_dir в data-конфиге.")
+        if d.is_dir():
+            return d
+    return None
+
+
+def catchall_domain(cfg: dict) -> str | None:
+    """Домен catch-all почты из конфига — чтобы найти в дампах НАШ адрес.
+
+    В `email_catchall_hex` лежит строка аккаунта GSA целиком (спин-макрос адреса,
+    сервер, пароль в обфускации); нам нужен только домен после '@'.
+    """
+    hexed = str(cfg.get("email_catchall_hex", "") or "")
+    if hexed:
+        try:
+            raw = bytes.fromhex(hexed).decode("utf-8", "replace")
+        except ValueError:
+            raw = ""
+        m = re.search(r"@([a-z0-9.-]+\.[a-z]{2,})", raw, re.I)
+        if m:
+            return m.group(1).lower()
+    dom = str(cfg.get("email_domain", "") or "").strip().lower()
+    return dom or None
+
+
+def _scan_report_text(st: dict) -> str:
+    """Полный человекочитаемый отчёт по скану (идёт в файл, не в stdout)."""
+    fmt = "%Y-%m-%d %H:%M"
+    L: list[str] = []
+    add = L.append
+    add(f"Скан debug-папки GSA: {st['dir']}")
+    add(f"Снят: {time.strftime(fmt, time.localtime(st['scanned_at']))}, "
+        f"за {st['elapsed_sec']} с")
+    add(f"Файлов: {st['files']}, прочитано тел: {st['bodies_read']}, "
+        f"ошибок чтения: {st['read_errors']}, объём: {st['total_mb']} МБ")
+    add(f"Окно: {time.strftime(fmt, time.localtime(st['first']))} — "
+        f"{time.strftime(fmt, time.localtime(st['last']))}")
+    add(f"Пустых (0 байт): {st['empty']}; медиана размера: {st['size_median_kb']} КБ; "
+        f"максимум: {st['size_max_kb']} КБ")
+    add(f"Уникальных доменов: {st['unique_hosts']}; уникальных тел (по хэшу начала): "
+        f"{st['unique_bodies']}")
+
+    def block(title: str, pairs, width: int = 6) -> None:
+        add("")
+        add(title)
+        for name, cnt in pairs:
+            add(f"  {cnt:{width}d}  {name}")
+
+    block("Причины (файл может попасть в несколько категорий):", st["signs"])
+    block("Вход/регистрация — насколько это реальная преграда:", st["login_wall"])
+    add("")
+    add("Почта — что сайты ответили про адрес "
+        f"(ошибки самого GSA/POP3 сюда не попадают): всего {sum(n for _, n in st['mail_signs'])}")
+    for name, cnt in st["mail_signs"]:
+        add(f"  {cnt:6d}  {name}")
+    add(f"Наш домен {st['mail_domain'] or '(не задан)'} встретился в дампах: "
+        f"{st['mail_domain_hits']}")
+    if st["mail_domain_hosts"]:
+        add("  где именно: " + ", ".join(f"{h} ×{n}" for h, n in st["mail_domain_hosts"]))
+    add("  из них с НАШИМ адресом на той же странице (т.е. реакция именно на него): "
+        + (", ".join(f"{k} ×{v}" for k, v in st["mail_signs_with_addr"]) or "нет"))
+    add(f"  уникальных наших адресов в дампах: {st['mail_addr_unique']}")
+    if st["mail_cases"]:
+        add("")
+        add("Конкретные случаи (наш адрес + сообщение сайта):")
+        for c in st["mail_cases"]:
+            add(f"  [{c['label']}] {c['host']}  ({c['file']})")
+            add(f"     адрес: {', '.join(c['addrs']) or '—'}")
+            add(f"     текст: {c['text'][:300]}")
+    if st["mail_addr_samples"]:
+        add("  примеры адресов: "
+            + ", ".join(f"{a} ×{n}" for a, n in st["mail_addr_samples"][:15]))
+    if st["mail_macro_unexpanded"]:
+        add("  ⚠ НЕРАСКРЫТЫЙ спин-макрос в адресе: "
+            + ", ".join(f"{a} ×{n}" for a, n in st["mail_macro_unexpanded"]))
+    if st["mail_hosts"]:
+        add("  сайты с почтовыми сообщениями: "
+            + ", ".join(f"{h} ×{n}" for h, n in st["mail_hosts"]))
+    block("Домены с повторами:", sorted(st["host_repeat"].items()))
+    block("Топ-30 доменов по числу дампов:", st["hosts"])
+    block("Зоны (TLD):", st["tlds"])
+    block("Движки сайтов:", st["engines"])
+    block("Капчи:", st["captchas"])
+    add("")
+    add(f"reCAPTCHA: страниц с капчей {st['recaptcha_pages']}, "
+        f"уникальных sitekey {st['sitekey_unique']}, "
+        f"ключ нашёлся только при полном чтении файла: {st['sitekey_found_deep']}")
+    for name, cnt in st["sitekey_kinds"]:
+        add(f"  {cnt:6d}  {name}")
+    if st["sitekey_cases"]:
+        add("  примеры негодных ключей:")
+        for c in st["sitekey_cases"][:25]:
+            add(f"     [{c['kind']}] {c['host']}: {c['key'] or '—'}")
+    block("Языки страниц:", st["langs"])
+    block("Расширения файлов:", st["exts"])
+    block("Частые заголовки страниц:", st["titles"])
+    block("Дампов по часам:", st["by_hour"])
+    add("")
+    add("Причины по топ-доменам:")
+    for host, reasons in st["top_host_signs"].items():
+        add(f"  {host}: " + ", ".join(f"{k} ×{v}" for k, v in reasons.items()))
+    return "\n".join(L) + "\n"
+
+
+def _write_scan_report(cfg: dict, st: dict) -> list[Path]:
+    """Кладёт подробный отчёт рядом с autopilot-статистикой (она на шаре — значит
+    отчёт видно с шары целиком, не только хвост job-лога) и в data/ ноды."""
+    name = str(cfg.get("server_name", "node"))
+    targets: list[Path] = []
+    for base in (cfg.get("autopilot_stats_dir"), str(DATA_DIR)):
+        if not base:
+            continue
+        d = Path(base)
+        if not d.is_dir():
+            continue
+        try:
+            (d / f"{name}.debug_scan.json").write_text(
+                json.dumps(st, ensure_ascii=False, indent=1), encoding="utf-8")
+            txt = d / f"{name}.debug_scan.txt"
+            txt.write_text(_scan_report_text(st), encoding="utf-8")
+            targets.append(txt)
+        except OSError as exc:
+            print(f"   ⚠ отчёт не записан в {d}: {exc}")
+    return targets
+
+
+def cmd_gsa_log(cfg: dict, args) -> None:
+    """Читает debug-папку GSA SER (read-only) — то, что GSA реально сохраняет на диск:
+    HTML-дампы страниц, по файлу на проблемную цель (имя = <домен>_<hex>.html).
+    Разбирает ВСЕ файлы (у каждого — «голова», размер/время из stat) и печатает
+    сжатую сводку; подробный отчёт (топ-домены, зоны, движки, капчи, языки, часы)
+    пишется файлом рядом с autopilot-статистикой на шаре и в data/ ноды.
+    С --mail — дампы со следами почты/верификации. --lines задаёт длину листинга."""
+    from lib import debugscan
+
+    d = gsa_debug_dir(cfg)
+    if d is None:
+        print("debug-папка GSA не найдена. Стандартный путь — "
+              "%APPDATA%\\GSA Search Engine Ranker\\debug; "
+              "если она в другом месте, задай gsa_debug_dir в data-конфиге.")
         return
-    newest = max(found, key=lambda p: p.stat().st_mtime)
-    lines = newest.read_text(encoding="utf-8", errors="replace").splitlines()
-    n = int(getattr(args, "lines", None) or 300)
+    if not any(p.is_file() for p in d.iterdir()):
+        print(f"debug-папка {d} пуста (debug-режим GSA выключен или её почистили).")
+        return
+
+    st = debugscan.scan(d, mail_domain=catchall_domain(cfg))
+    fmt = "%Y-%m-%d %H:%M"
+    written = _write_scan_report(cfg, st)
+
     if getattr(args, "mail", False):
-        kw = ("e-mail", "email", "pop3", "verif", "activat", "confirm", "почт")
-        out = [ln for ln in lines if any(k in ln.lower() for k in kw)][-n:]
-        print(f"── GSA-лог {newest.name}: строки про почту/верификацию (посл. {len(out)}) ──")
-    else:
-        out = lines[-n:]
-        print(f"── GSA-лог {newest.name}: последние {len(out)} строк ──")
-    print("\n".join(out) if out else "(нет подходящих строк)")
+        n = int(getattr(args, "lines", None) or 20)
+        hits = [(p, p.stat()) for p in sorted(d.iterdir(), key=lambda x: -x.stat().st_mtime)
+                if p.is_file() and p.stat().st_size
+                and any(w in p.open("rb").read(8000).decode("utf-8", "replace").lower()
+                        for w in MAIL_WORDS)][:n]
+        print(f"── дампы со следами почты/верификации (первые {len(hits)}) ──")
+        for p, s in hits:
+            print(f"   {time.strftime(fmt, time.localtime(s.st_mtime))}  "
+                  f"{s.st_size / 1024:7.0f} КБ  {p.name}")
+        return
+
+    # stdout держим коротким: панель показывает только хвост job-лога (4000 байт)
+    print(f"── debug-папка {d} ──")
+    print(f"   файлов: {st['files']}, объём: {st['total_mb']} МБ, разобрано за "
+          f"{st['elapsed_sec']} с, ошибок чтения: {st['read_errors']}")
+    print(f"   окно: {time.strftime(fmt, time.localtime(st['first']))} — "
+          f"{time.strftime(fmt, time.localtime(st['last']))}")
+    print(f"   пустых (сайт не ответил): {st['empty']} "
+          f"({st['empty'] * 100 // max(st['files'], 1)}%), "
+          f"медиана {st['size_median_kb']} КБ, максимум {st['size_max_kb']} КБ")
+    print(f"   доменов: {st['unique_hosts']}, уникальных тел: {st['unique_bodies']} "
+          f"(повторы: " + ", ".join(f"{k} — {v}" for k, v in sorted(st["host_repeat"].items()))
+          + ")")
+
+    def top(title: str, pairs, limit: int) -> None:
+        if pairs:
+            print(f"   {title}: " + ", ".join(f"{k} ×{v}" for k, v in pairs[:limit]))
+
+    top("причины", st["signs"], 8)
+    top("вход", st["login_wall"], 4)
+    top("почта", st["mail_signs"], 5)
+    top("почта (с нашим адресом на странице)", st["mail_signs_with_addr"], 4)
+    print(f"   наш домен {st['mail_domain'] or '(не задан)'} в дампах: "
+          f"{st['mail_domain_hits']}, уникальных адресов: {st['mail_addr_unique']}"
+          + (f", НЕРАСКРЫТЫХ макросов: {sum(n for _, n in st['mail_macro_unexpanded'])}"
+             if st["mail_macro_unexpanded"] else ""))
+    top("движки", st["engines"], 6)
+    top("капчи", st["captchas"], 5)
+    print(f"   reCAPTCHA-страниц: {st['recaptcha_pages']}, "
+          f"уникальных sitekey: {st['sitekey_unique']}, "
+          f"найдено дочитыванием: {st['sitekey_found_deep']}")
+    top("sitekey", st["sitekey_kinds"], 6)
+    top("зоны", st["tlds"], 8)
+    top("языки", st["langs"], 6)
+    top("топ-доменов", st["hosts"], 6)
+    if written:
+        print("   подробный отчёт: " + ", ".join(str(p) for p in written))
+    print("   ⚠ папку GSA не чистит сама — растёт бесконечно, чистить вручную.")
 
 
 def _force_utf8_output() -> None:
@@ -1983,10 +2683,11 @@ def main() -> None:
     ap.add_argument("--check", action="store_true",
                     help="диагностика путей и файлов")
     ap.add_argument("--gsa-log", action="store_true",
-                    help="показать файловый лог GSA SER (read-only)")
+                    help="прочитать debug-папку GSA SER: дампы проблемных целей (read-only)")
     ap.add_argument("--mail", action="store_true",
-                    help="с --gsa-log: только строки про почту/верификацию")
-    ap.add_argument("--lines", type=int, help="с --gsa-log: сколько строк (по умолчанию 300)")
+                    help="с --gsa-log: только дампы со следами почты/верификации")
+    ap.add_argument("--lines", type=int,
+                    help="с --gsa-log: сколько файлов в листинге (по умолчанию 20)")
     ap.add_argument("--stats", action="store_true",
                     help="снимок статистики по проектам (остаток/verified/…)")
     ap.add_argument("--report", action="store_true",
