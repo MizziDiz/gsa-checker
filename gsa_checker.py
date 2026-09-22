@@ -1075,8 +1075,9 @@ def cmd_create(cfg: dict, args) -> None:
         # лимит ссылок/день = пауза проекта после N сабмишенов на сутки (1440 мин)
         prj.set_value("Options", "pause project on", "1")
         prj.set_value("Options", "pause project submissions", str(args.links_per_day))
-        prj.set_value("Options", "pause project minutes", "1440")
-        changed.append(f"лимит {args.links_per_day}/день")
+        mins = int(getattr(args, "pause_minutes", 0) or 1440)
+        prj.set_value("Options", "pause project minutes", str(mins))
+        changed.append(f"лимит {args.links_per_day} на {mins} мин")
 
     # boost-обогащение: шаффл спинтакса (уникальность) + замена статичных полей + catch-all почта
     kw = kws_val.split(",")[0].strip() if kws_val else ""
@@ -2577,6 +2578,8 @@ def main() -> None:
     ap.add_argument("--force", action="store_true", help="перезаписать (--create)")
     ap.add_argument("--anchor", action="append",
                     help="анкор (повторяемый; --create; в Anchor_Text, GSA крутит ≈ поровну)")
+    ap.add_argument("--pause-minutes", type=int, default=0,
+                    help="пауза после лимита, минут (--create; 0 = 1440)")
     ap.add_argument("--links-per-day", type=int, default=0,
                     help="лимит ссылок/день (--create; пауза проекта после N сабмишенов)")
     ap.add_argument("--articles", type=int, default=0,
