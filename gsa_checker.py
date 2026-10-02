@@ -2065,9 +2065,10 @@ def cmd_backup(cfg: dict, args) -> None:
 
 def cmd_emails(cfg: dict, args) -> None:
     """Обновляет секцию [email accounts] в .prj свежими почтами (уникальный набор на
-    проект). Формат нативный для GSA (разделитель 0xFF). В catch-all-режиме дополнительно
-    ОЧИЩАЕТ [data_value] your e-mail: GSA показывает это поле отдельным verification-аккаунтом
-    без POP3 («Server -»), который не верифицирует. Прочее .prj не трогает.
+    проект). Формат нативный для GSA (разделитель 0xFF). В catch-all-режиме также
+    ЗАПОЛНЯЕТ [data_value] your e-mail адресом из раздатчика (решение оператора 01.10.2026;
+    прежде поле очищалось, т.к. GSA показывает его отдельным verification-аккаунтом без POP3).
+    Прочее .prj не трогает.
 
     ⚠ Как и --settings: делать при ЗАКРЫТОМ GSA (иначе перезапишет при выходе)."""
     from lib.prj import Prj
@@ -2116,9 +2117,15 @@ def cmd_emails(cfg: dict, args) -> None:
                  if catchall else em.build_account_lines(count, provider, domains, used=set()))
         prj.replace_section("email accounts", lines)
         if catchall:
-            # GSA показывает [data_value] your e-mail отдельным verification-аккаунтом без
-            # POP3 («Server -», не верифицирует) — чистим, остаётся только catch-all с POP3.
-            prj.set_value("data_value", "your e-mail", "")
+            # Оператор 01.10.2026: поле your e-mail заполнять тем же адресом, что в раздатчике
+            # (первое поле catch-all строки до 0xFF). Прежде поле очищали, т.к. GSA показывает
+            # его отдельным verification-аккаунтом без POP3 («Server -»); решение оператора важнее.
+            try:
+                acct = em.build_catchall_lines(1, cfg["email_catchall_hex"])[0].split("=", 1)[1]
+                your_mail = acct.split("\udcff")[0].split("\xff")[0].strip()
+            except (ValueError, KeyError, IndexError):
+                your_mail = ""
+            prj.set_value("data_value", "your e-mail", your_mail)
         done += 1
         print(f"  {'+ ' if args.apply else '(dry) '}{prj_path.name}: почт {old_n} → {count}")
         if args.apply:
