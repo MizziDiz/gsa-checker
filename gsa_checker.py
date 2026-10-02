@@ -1100,8 +1100,16 @@ def cmd_create(cfg: dict, args) -> None:
     if cfg.get("email_catchall") and cfg.get("email_catchall_hex"):
         prj.replace_section("email accounts", _em.build_catchall_lines(
             int(cfg.get("emails_catchall_count", 1) or 1), cfg["email_catchall_hex"]))
-        prj.set_value("data_value", "your e-mail", "")
-        changed.append("catch-all почта")
+        # Поле your e-mail — тот же адрес, что в раздатчике почт (первое поле catch-all
+        # строки до 0xFF: спин-макрос@домен). Раньше поле очищалось; оператор 01.10.2026
+        # велел заполнять его той же почтой, что и в [email accounts].
+        try:
+            acct = _em.build_catchall_lines(1, cfg["email_catchall_hex"])[0].split("=", 1)[1]
+            your_mail = acct.split("\udcff")[0].split("\xff")[0].strip()
+        except (ValueError, KeyError, IndexError):
+            your_mail = ""
+        prj.set_value("data_value", "your e-mail", your_mail)
+        changed.append("catch-all почта" + (" + your e-mail" if your_mail else ""))
 
     # .targets из батча
     targets: list[str] = []
@@ -1168,24 +1176,53 @@ def cmd_import_boost(cfg: dict, args) -> None:
         print("Очередь boost пуста — импортировать нечего.")
         return
     exts = (".targets", ".articles", ".articles_idx")
-    imported = []
+    imported, failed = [], []
     for prj in prjs:
         mates = [prj] + [queue / (prj.stem + e) for e in exts]
         mates = [m for m in mates if m.exists()]
         print(f"  {'(dry) ' if dry else '+ '}{prj.stem}  [{', '.join(m.suffix for m in mates)}]")
         if dry:
             continue
-        for m in mates:
-            shutil.copy2(m, projects / m.name)          # в папку проектов GSA
-        done.mkdir(parents=True, exist_ok=True)
-        for m in mates:
-            shutil.move(str(m), str(done / m.name))     # из очереди → imported (не повторять)
+        # Один сбойный бандл НЕ должен останавливать очередь. 01.09.2026 очередь
+        # стояла одиннадцать дней из-за единственного проекта: заявку на уже
+        # обработанный сайт подали повторно, в imported лежала прежняя копия, и
+        # перенос поверх неё падал с PermissionError — файлы там принадлежат
+        # root с правами 0644, а нода ходит на шару другим пользователем.
+        # Цикл обрывался на первом же проекте, остальные 64 не импортировались
+        # НИКОГДА и молча. Теперь сбой одного бандла пропускается с громкой
+        # записью, а очередь идёт дальше.
+        try:
+            for m in mates:
+                shutil.copy2(m, projects / m.name)      # в папку проектов GSA
+            done.mkdir(parents=True, exist_ok=True)
+            for m in mates:
+                dst = done / m.name
+                # Переносим ПОВЕРХ прежней копии: повторная заявка на тот же
+                # сайт — обычное дело, и она должна вытеснять старую, а не
+                # упираться в неё. Прежнюю уводим в сторону, а не теряем.
+                if dst.exists():
+                    keep = dst.with_name(dst.name + ".superseded")
+                    if keep.exists():
+                        keep.unlink()
+                    dst.rename(keep)
+                shutil.move(str(m), str(dst))           # из очереди → imported
+        except OSError as exc:
+            failed.append((prj.stem, f"{type(exc).__name__}: {exc}"))
+            print(f"  ⚠ {prj.stem}: не импортирован ({type(exc).__name__}: {exc}) "
+                  f"— пропускаю, очередь идёт дальше")
+            continue
         imported.append(prj.stem)
 
     if dry:
         print(f"[dry-run] импортировали бы {len(prjs)} проект(ов); refresh не звал.")
         return
     print(f"✓ импортировано {len(imported)} проект(ов) в {projects}")
+    if failed:
+        # Громко и отдельным списком: молчаливый пропуск здесь уже стоил
+        # одиннадцати дней простоя очереди.
+        print(f"⚠ НЕ ИМПОРТИРОВАНО {len(failed)} проект(ов) — они остались в очереди:")
+        for name, why in failed:
+            print(f"    {name}: {why}")
     if imported:
         from lib import ui
         ok = ui.refresh(cfg, logging.getLogger("gsa_checker"))
@@ -1978,13 +2015,21 @@ def cmd_backup(cfg: dict, args) -> None:
     target_dir = Path(args.dir or cfg.get("gsa_projects_dir", ""))
     if not target_dir.is_dir():
         sys.exit(f"Папка с .prj не найдена: {target_dir}")
-    prj_files = sorted(target_dir.glob("*.prj"))
+    all_prj = sorted(target_dir.glob("*.prj"))
+    prj_files = all_prj
+    tag = "manual"
     if args.only:
-        prj_files = [p for p in prj_files if args.only in p.name]
+        prj_files = [p for p in all_prj if args.only in p.name]
+        if not prj_files and all_prj:
+            # Узел без проектов под фильтр (исполнитель boost: там нет Split) — снимаем всё,
+            # иначе с него не получить ни описи, ни самих .prj (01.10.2026, поиск потерянного проекта).
+            print(f"В {target_dir} нет .prj под фильтр --only={args.only!r} — снимаю все {len(all_prj)}")
+            prj_files = all_prj
+            tag = "all"
     if not prj_files:
-        print(f"В {target_dir} нет .prj (фильтр --only={args.only!r})")
+        print(f"В {target_dir} нет .prj")
         return
-    dest = _snapshot_projects(cfg, prj_files, tag="manual")
+    dest = _snapshot_projects(cfg, prj_files, tag=tag)
     if not dest:
         sys.exit("Бэкап не удался.")
     try:
