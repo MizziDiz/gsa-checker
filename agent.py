@@ -126,7 +126,19 @@ def git_dirs(cfg: dict) -> list[str]:
 
 def system_actions(cfg: dict) -> dict[str, list[list[str]]]:
     """Системные действия (не gsa_checker): имя → список ФИКС. команд (argv, без shell)."""
-    return {"git-pull": [["git", "-C", d, "pull", "--ff-only"] for d in git_dirs(cfg)]}
+    dirs = git_dirs(cfg)
+    return {
+        # строгий ff-only: не трогает рабочее дерево, падает на локальных правках
+        "git-pull": [["git", "-C", d, "pull", "--ff-only"] for d in dirs],
+        # устойчивый: сбрасывает отслеживаемые правки кода (origin их перекрывает) и тянет
+        # ff-only. Нужен, когда в папке кода остались ручные правки (напр. gsa_checker.py от 09.09).
+        # Нетслеживаемое (config/data) не трогает: checkout -- . ревертит только отслеживаемое.
+        "git-sync": [cmd for d in dirs for cmd in (
+            ["git", "-C", d, "fetch", "origin"],
+            ["git", "-C", d, "checkout", "--", "."],
+            ["git", "-C", d, "pull", "--ff-only"],
+        )],
+    }
 
 
 def _validate_autopilot(updates: dict) -> tuple[dict, list[str]]:
